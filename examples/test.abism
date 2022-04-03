@@ -1,0 +1,6 @@
+block "main" :: { return [ rsi ]; } {
+ %hello %world = 1 2; 
+ %hello
+}
+
+
