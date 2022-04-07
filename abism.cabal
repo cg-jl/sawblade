@@ -97,11 +97,13 @@ test-suite abism-test
     -- The interface type and version of the test suite.
     type:             exitcode-stdio-1.0
 
+    other-modules:    TestParser,TestAlloc
+
     -- Directories containing source files.
     hs-source-dirs:   test
 
     -- The entrypoint to the test suite.
-    main-is:          MyLibTest.hs
+    main-is:          TestMain.hs
 
     -- Test dependencies.
-    build-depends:    base ^>=4.14.3.0
+    build-depends:    base ^>=4.14.3.0,parsec,QuickCheck,HUnit,abism,mtl,containers

@@ -1,0 +1,10 @@
+cradle:
+  cabal:
+    - path: "lib"
+      component: "lib:abism"
+
+    - path: "app/Main.hs"
+      component: "abism:exe:abism"
+
+    - path: "test"
+      component: "abism:test:abism-test"

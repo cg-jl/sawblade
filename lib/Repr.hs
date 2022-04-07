@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Repr where
 
@@ -7,10 +8,12 @@ import Control.Monad.State.Class
 import Data.Functor ((<&>))
 import Data.List (elemIndex)
 import Data.Maybe
+import Data.String
 import GHC.Natural (Natural)
 
 -- typed index
 newtype Ref a = Ref {unRef :: Natural}
+  deriving (Eq)
 
 data Registry a = Registry {unRegistry :: [a], registryLen :: Natural}
 
@@ -33,18 +36,21 @@ instance Show (Ref a) where
   show (Ref i) = '#' : show i
 
 data Visibility = Export | Bounded
+  deriving (Eq)
 
 instance Show Visibility where
   show Export = "export"
   show Bounded = "bounded"
 
 data Label = Label {labelVisibility :: Visibility, labelName :: String}
+  deriving (Eq)
 
 instance Show Label where
-  show (Label Bounded name) = show (Binding name)
+  show (Label Bounded name) = '@' : show name
   show (Label Export name) = show name
 
 data Op = Return [Binding] | Assign [Binding] Value
+  deriving (Eq)
 
 instance Show Op where
   show (Return bindings) = unwords $ map show bindings
@@ -53,11 +59,14 @@ instance Show Op where
 newtype Binding = Binding {unBinding :: String}
   deriving (Eq, Ord)
 
+instance IsString Binding where
+  fromString = Binding
+
 instance Show Binding where
   show = ('%' :) . unBinding
 
 newtype Abi = Abi {abiReturns :: [Register]}
-  deriving (Show)
+  deriving (Show, Eq)
 
 emptyAbi :: Abi
 emptyAbi = Abi []
@@ -65,6 +74,7 @@ emptyAbi = Abi []
 -- abi is behind a ref because there will be a way to declare an ABI separately.
 --
 data Block = Block {blockLabel :: Label, blockAbi :: Maybe (Ref Abi), blockOps :: [Op]}
+  deriving (Eq)
 
 instance Show Block where
   show (Block label abi ops) = "block " ++ show label ++ maybe "" (\abi -> " :: " ++ show abi ++ " ") abi ++ opsList
@@ -84,6 +94,7 @@ refMaybe x xs = elemIndex x xs <&> Ref . fromIntegral
 
 -- TODO: extend with more stuff
 newtype Value = Constants [Int]
+  deriving (Eq)
 
 instance Show Value where
   show (Constants values) = unwords $ map show values

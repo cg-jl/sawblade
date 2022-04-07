@@ -1,54 +1,17 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 
-module Parser (parse) where
+module Parser where
 
-import Control.Monad (void, when)
-import Control.Monad.State (MonadState, MonadTrans (lift))
-import Control.Monad.Trans ()
-import Control.Monad.Trans.Maybe (MaybeT (MaybeT, runMaybeT))
-import Data.Char (isPrint, isSpace)
-import Data.Foldable (find)
-import Data.Functor ((<&>))
-import Data.Maybe (isJust)
+import Control.Monad
+import Control.Monad.State
+import Control.Monad.Trans.Maybe
+import Data.Char
+import Data.Foldable
+import Data.Functor
+import Data.Maybe
 import Repr
-  ( Abi (abiReturns),
-    Binding (..),
-    Block (Block),
-    Label (Label),
-    Op (..),
-    Ref,
-    Register,
-    Registry,
-    Value (..),
-    Visibility (Export, Bounded),
-    addToRegistry,
-    emptyAbi,
-  )
-import Text.Parsec
-  ( ParseError,
-    ParsecT,
-    SourceName,
-    Stream,
-    anyChar,
-    between,
-    char,
-    digit,
-    label,
-    many1,
-    manyTill,
-    optionMaybe,
-    optional,
-    runPT,
-    satisfy,
-    sepBy,
-    sepEndBy,
-    sepEndBy1,
-    space,
-    string,
-    (<?>),
-    (<|>),
-  )
+import Text.Parsec hiding (parse)
 
 parse :: MonadState (Registry Abi) m => SourceName -> String -> m (Either ParseError Block)
 parse = runPT block ()
@@ -77,7 +40,7 @@ blockLabel :: Stream s m Char => ParsecT s u m Label
 blockLabel = label (exportLabel <|> boundLabel) "block label"
   where
     exportLabel = between (char '"') (char '"') bindingName <&> Label Export <?> "export label"
-    boundLabel = binding <&> Label Bounded . unBinding <?> "bound label"
+    boundLabel = char '@' >> bindingName <&> Label Bounded <?> "bounded label"
 
 body :: Stream s m Char => ParsecT s u m a -> ParsecT s u m [a]
 body inner = do
