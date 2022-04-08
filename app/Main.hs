@@ -1,11 +1,11 @@
 module Main where
 
+import Codegen
 import Control.Monad.State
 import Data.Functor
 import Data.Semigroup ((<>))
 import Options.Applicative
 import Parser
-import Codegen
 import Repr
 import System.IO
 import qualified Text.Parsec as Parsec
@@ -39,7 +39,7 @@ processParsed (Right block, abis) = do
 inputKind :: Parser InputKind
 inputKind = file <|> pure StdInput
   where
-    file = strOption (long "file" <> short 'f' <> metavar "FILE" <> help "optional filename to use instead of stdin" <> value "-" <> showDefault) <&> FileInput
+    file = strOption (long "file" <> short 'f' <> metavar "FILE" <> help "optional filename to use instead of stdin" <> Options.Applicative.value "-" <> showDefault) <&> FileInput
 
 main :: IO ()
 main = processParsed =<< parse' =<< execParser opts
