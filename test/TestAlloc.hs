@@ -16,7 +16,7 @@ sampleRegistry :: Registry Abi
 sampleRegistry = execState (addToRegistry sampleAbi) emptyRegistry
 
 sampleBlock :: Block
-sampleBlock = Block (Repr.Label Export "main") (Just (Ref 0)) [Assign ["hello", "world"] $ Constants [1, 2], Return ["hello", "world"]]
+sampleBlock = Block (Repr.Label Export "main") (Just (Ref 0)) [] [Assign ["hello", "world"] $ Constants [1, 2], Return ["hello", "world"]]
 
 ensureNoLeftOuts :: Test
 ensureNoLeftOuts = null (snd $ allocBlock sampleBlock sampleRegistry) ~? "must have no left outs from allocations"

@@ -73,15 +73,19 @@ emptyAbi = Abi []
 
 -- abi is behind a ref because there will be a way to declare an ABI separately.
 --
-data Block = Block {blockLabel :: Label, blockAbi :: Maybe (Ref Abi), blockOps :: [Op]}
+data Block = Block {blockLabel :: Label, blockAbi :: Maybe (Ref Abi), blockArgs :: [Binding], blockOps :: [Op]}
   deriving (Eq)
 
 instance Show Block where
-  show (Block label abi ops) = "block " ++ show label ++ maybe "" (\abi -> " :: " ++ show abi ++ " ") abi ++ opsList
+  show (Block label abi args ops) = "block " ++ show label ++ maybe "" (\abi -> " :: " ++ show abi ++ " ") abi ++ argsList ++ opsList
     where
       opsList
         | null ops = "{}"
         | otherwise = "{\n" ++ unlines (map show ops) ++ "\n}"
+
+      argsList
+        | null args = "()"
+        | otherwise = '(' : unwords (map show args) ++ ")"
 
 indexMaybe :: [a] -> Natural -> Maybe a
 indexMaybe [] = const Nothing
@@ -93,11 +97,19 @@ refMaybe :: Eq a => a -> [a] -> Maybe (Ref a)
 refMaybe x xs = elemIndex x xs <&> Ref . fromIntegral
 
 -- TODO: extend with more stuff
-newtype Value = Constants [Int]
+data Value = Constants [Int] | Add Binding Source
   deriving (Eq)
+
+data Source = SrcBinding Binding | SrcConstant Int
+  deriving (Eq)
+
+instance Show Source where
+  show (SrcBinding b) = show b
+  show (SrcConstant c) = show c
 
 instance Show Value where
   show (Constants values) = unwords $ map show values
+  show (Add a b) = unwords ["add", show a, show b]
 
 data Register
   = Rsp

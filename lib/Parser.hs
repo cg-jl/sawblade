@@ -10,6 +10,7 @@ import Data.Char
 import Data.Foldable
 import Data.Functor
 import Data.Maybe
+import Debug.Trace
 import Repr
 import Text.Parsec hiding (parse)
 
@@ -85,12 +86,23 @@ abiKey = returns
 abi :: (Stream s m Char, MonadState (Registry Abi) m) => ParsecT s u m (Ref Abi)
 abi = (body abiKey >>= addToRegistry . buildAbi) <?> "abi spec"
 
+constant :: Stream s m Char => ParsecT s u m Int
+constant = many1 digit <&> read <?> "numeric constant"
+
 -- TODO: calls and other expressions should have 'primitives': bindings or constants
 
 value :: Stream s m Char => ParsecT s u m Value
-value = constants
+value = (constants <?> "list of constants") <|> (add <?> "'add' pseudo-instruction")
   where
-    constants = (many1 digit <&> read) `sepEndBy1` whitespace <&> Constants
+    constants = constant `sepEndBy1` whitespace <&> Constants
+    add = do
+      string "add" <?> "keyword 'add'"
+      whitespace
+      s1 <- binding
+      whitespace
+      Add s1 <$> source
+
+    source = (binding <&> SrcBinding) <|> (constant <&> SrcConstant)
 
 op :: Stream s m Char => ParsecT s u m Op
 op = do
@@ -102,14 +114,40 @@ op = do
     then Assign bindings <$> (optional whitespace >> value)
     else pure $ Return bindings
 
-block :: (Stream s m Char, MonadState (Registry Abi) m) => ParsecT s u m Block
+hasArgs :: Stream s m Char => ParsecT s u m Bool
+hasArgs = try (optionMaybe $ lookAhead (char '(')) <&> isJust
+
+args :: Stream s m Char => ParsecT s u m [Binding]
+args = do
+  char '(' <?> "left paren to start argument list"
+  optional whitespace
+  bindings <- binding `sepEndBy` whitespace
+  char ')' <?> "right paren to end argument list"
+  pure bindings
+
+blockSpec ::
+  Stream s m Char =>
+  MonadState (Registry Abi) m =>
+  ParsecT s u m (Maybe (Ref Abi), [Binding])
+blockSpec = do
+  has <- optionMaybe (string "::") <&> isJust
+  if has then optional whitespace >> pBlockSpec else pure (Nothing, [])
+  where
+    pBlockSpec = do
+      opt_abi <- optionMaybe abi
+      args <- hasArgs >>= \r -> if r then args else pure []
+      pure (opt_abi, args)
+
+block ::
+  Stream s m Char =>
+  MonadState (Registry Abi) m =>
+  ParsecT s u m Block
 block = do
   string "block" <?> "keyword 'block'"
   optional whitespace
   name <- Parser.blockLabel
   optional whitespace
-  -- TODO: block argument list
-  opt_abi <- runMaybeT $ MaybeT (optionMaybe (string "::" >> optional whitespace)) >> lift abi
+  (opt_abi, args) <- blockSpec
   optional whitespace
   ops <- body op
-  pure $ Block name opt_abi ops
+  pure $ Block name opt_abi args ops

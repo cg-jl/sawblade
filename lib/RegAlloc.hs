@@ -119,6 +119,11 @@ endLife name = do
 
 valueBindings :: Value -> [Binding]
 valueBindings (Constants _) = []
+valueBindings (Add a b) = a : maybeToList (sourceBinding b)
+
+sourceBinding :: Source -> Maybe Binding
+sourceBinding (SrcBinding b) = Just b
+sourceBinding (SrcConstant _) = Nothing
 
 data OpBindings = OpBindings {declaredBindings :: [Binding], usedBindings :: [Binding]}
 

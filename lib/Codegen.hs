@@ -3,11 +3,13 @@
 
 module Codegen where
 
+import Control.Applicative
 import Control.Monad.RWS
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Writer
 import Data.Foldable
+import Data.Functor
 import Data.List
 import qualified Data.Map as Map
 import GHC.Natural
@@ -19,7 +21,7 @@ newtype LabelGenerator = LabelGen {labelGenCurrent :: Natural}
 newLabelGen :: LabelGenerator
 newLabelGen = LabelGen 0
 
-data Assembly = AsmLabel String | Mov DataSink DataSource | Ret
+data Assembly = AsmLabel String | Mov DataSink DataSource | Ret | Add DataSink DataSource
 
 instruction :: [String] -> String
 instruction [] = []
@@ -28,6 +30,7 @@ instruction (x : xs) = "  " ++ x ++ " " ++ intercalate ", " xs
 instance Show Assembly where
   show (AsmLabel l) = l ++ ":"
   show (Mov from to) = instruction ["mov", show from, show to]
+  show (Codegen.Add to from) = instruction ["add", show to, show from]
   show Ret = instruction ["ret"]
 
 data DataSink = SinkRegister Register | SinkMemory Register Int
@@ -53,12 +56,36 @@ labelGenNext = do
   put $ LabelGen $ current + 1
   pure $ AsmLabel $ ".L" ++ show current
 
+tellSingle :: MonadWriter [a] m => a -> m ()
+tellSingle = tell . (: [])
+
 asmOp :: MonadWriter [Assembly] m => MonadReader (BindingMap Register) m => Op -> m ()
 asmOp (Return _) = tell [Ret]
 asmOp (Assign bindings value) = case value of
   Constants ctants -> do
     regs <- traverse (asks . flip (Map.!)) bindings
     tell $ zipWith Mov (map SinkRegister regs) (map SourceConstant ctants)
+  Repr.Add a b -> do
+    let [target] = bindings
+    targetSink <- bindingToSink target
+    regA <- bindingReg a
+    sourceB <- srcSource b
+    -- mov <target>, <a>
+    -- add <target>, <b>
+    tell
+      [ Mov targetSink (SourceRegister regA),
+        Codegen.Add (SinkRegister regA) sourceB
+      ]
+
+bindingReg :: MonadReader (BindingMap Register) m => Binding -> m Register
+bindingReg b = asks (Map.! b)
+
+bindingToSink :: MonadReader (BindingMap Register) m => Binding -> m DataSink
+bindingToSink b = asks (Map.! b) <&> SinkRegister
+
+srcSource :: MonadReader (BindingMap Register) m => Source -> m DataSource
+srcSource (SrcConstant c) = pure $ SourceConstant c
+srcSource (SrcBinding b) = asks (Map.! b) <&> SourceRegister
 
 mkLabel :: MonadState LabelGenerator m => Label -> m Assembly
 mkLabel (Label Export name) = pure $ AsmLabel name

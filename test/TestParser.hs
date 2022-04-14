@@ -53,7 +53,7 @@ testBlock :: Test
 testBlock = test ["implicit abi" ~: testImplicitAbi, "explicit abi" ~: testExplicitAbi]
   where
     testBlock :: Maybe (Ref Abi) -> String -> Test
-    testBlock abi source = Right (Block (Repr.Label Bounded "hello") abi []) ~=? evalState (testParserT Parser.block ("block @hello " ++ source ++ "{}")) emptyRegistry
+    testBlock abi source = Right (Block (Repr.Label Bounded "hello") abi [] []) ~=? evalState (testParserT Parser.block ("block @hello " ++ source ++ "{}")) emptyRegistry
 
     testImplicitAbi = testBlock Nothing ""
     testExplicitAbi = testBlock (Just $ Ref 0) ":: {}"

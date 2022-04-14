@@ -1,6 +1,6 @@
-block "main" :: { return [ rsi ]; } {
- %hello %world = 1 2; 
- %hello
+block "main" :: { return [ rsi ]; }(%world) {
+  %hello = add %world 1;
+  %hello
 }
 
 
