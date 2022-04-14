@@ -43,7 +43,7 @@ instance Show DataSink where
 data DataSource = SourceConstant Int | SourceRegister Register | SourceMemory Register Int
 
 instance Show DataSource where
-  show (SourceConstant nat) = '#' : show nat
+  show (SourceConstant nat) = show nat
   show (SourceRegister reg) = show reg
   show (SourceMemory reg offt) = showMem (reg, offt)
 
