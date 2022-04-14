@@ -76,6 +76,12 @@ emptyAbi = Abi []
 data Block = Block {blockLabel :: Label, blockAbi :: Maybe (Ref Abi), blockArgs :: [Binding], blockOps :: [Op]}
   deriving (Eq)
 
+isExport :: Block -> Bool
+isExport = isExportLabel . blockLabel
+  where
+    isExportLabel (Label Export _) = True
+    isExportLabel _ = False
+
 instance Show Block where
   show (Block label abi args ops) = "block " ++ show label ++ maybe "" (\abi -> " :: " ++ show abi ++ " ") abi ++ argsList ++ opsList
     where

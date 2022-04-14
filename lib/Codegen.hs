@@ -21,7 +21,9 @@ newtype LabelGenerator = LabelGen {labelGenCurrent :: Natural}
 newLabelGen :: LabelGenerator
 newLabelGen = LabelGen 0
 
-data Assembly = AsmLabel String | Mov DataSink DataSource | Ret | Add DataSink DataSource
+data Assembly = AsmLabel String | Mov DataSink DataSource | Ret | Add DataSink DataSource | AsmDirective Directive
+
+newtype Directive = Extern String
 
 instruction :: [String] -> String
 instruction [] = []
@@ -32,6 +34,10 @@ instance Show Assembly where
   show (Mov from to) = instruction ["mov", show from, show to]
   show (Codegen.Add to from) = instruction ["add", show to, show from]
   show Ret = instruction ["ret"]
+  show (AsmDirective dir) =  show dir
+
+instance Show Directive where
+  show (Extern name) = unwords ["extern", name]
 
 data DataSink = SinkRegister Register | SinkMemory Register Int
 
@@ -95,6 +101,8 @@ mkLabel (Label Bounded _) = labelGenNext
 asmBlock :: MonadState LabelGenerator m => MonadReader (Registry Abi) m => MonadWriter [Assembly] m => Block -> m ()
 asmBlock block = do
   allocs <- mkAllocs block
+  -- if it's an exported block, add a `.global` directive
+  when (isExport block) $ tellSingle (AsmDirective $ Extern $ labelName $ blockLabel block)
   mkLabel (blockLabel block) >>= tell . (: [])
   runReaderT (traverse_ asmOp $ blockOps block) allocs
 
