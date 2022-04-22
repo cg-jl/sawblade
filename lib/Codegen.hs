@@ -80,7 +80,7 @@ asmOp (Assign bindings value) = case value of
     -- add <target>, <b>
     tell
       [ Mov targetSink (SourceRegister regA),
-        Codegen.Add (SinkRegister regA) sourceB
+        Codegen.Add targetSink sourceB
       ]
 
 bindingReg :: MonadReader (BindingMap Register) m => Binding -> m Register
