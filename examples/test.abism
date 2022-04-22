@@ -1,4 +1,4 @@
-block "main" :: { return [ rsi ]; }(%world) {
+block @main :: { return [ rsi ]; }(%world) {
   %hello = add %world 1;
   %hello
 }

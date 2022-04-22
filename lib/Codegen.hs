@@ -34,7 +34,7 @@ instance Show Assembly where
   show (Mov from to) = instruction ["mov", show from, show to]
   show (Codegen.Add to from) = instruction ["add", show to, show from]
   show Ret = instruction ["ret"]
-  show (AsmDirective dir) =  show dir
+  show (AsmDirective dir) = show dir
 
 instance Show Directive where
   show (Extern name) = unwords ["extern", name]
