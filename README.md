@@ -2,6 +2,10 @@
 
 Abism is a compiler backend, like qbe/LLVM, but in full amateur mode. It currently works very barely but is able to output valid x86_64 assembly code.
 
+## Notes
+
+- The backend produces suitable output for `nasm`, not for `as`. Future versions will consider `as`/`gcc`.
+
 ## Design Idea & Spec
 
 The name  'Abism' is a mix between 'abi' and 'asm'. The main idea is to be able to specify exactly how pieces of code interface with each other, and let it decide
