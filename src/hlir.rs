@@ -1,3 +1,12 @@
+//! A High-Level Intermediate Representation.
+//! Serves for debugging purposes, and to turn down
+//! the AST into a stricter layout that doesn't use
+//! strings.
+//!
+//! This module will be responsible for handing out
+//! user errors in the case of there being any. Past
+//! this point any malformed IR is purely the program's
+//! fault.
 use crate::arch::Architecture;
 use std::collections::{HashMap, HashSet};
 
