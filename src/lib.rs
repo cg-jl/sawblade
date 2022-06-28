@@ -268,10 +268,6 @@ pub mod ir {
     struct BindingMap<'a>(HashMap<&'a str, usize>);
 
     impl<'a> BindingMap<'a> {
-        fn new() -> Self {
-            Self(HashMap::new())
-        }
-
         fn expect_binding_index(&self, name: &'a str) -> index::Binding {
             let index = self.get_binding_index(name);
             match index {
@@ -290,14 +286,6 @@ pub mod ir {
                 .get(&name)
                 .copied()
                 .map(|index| unsafe { index::Binding::from_index(index) })
-        }
-
-        fn add_binding_index(&mut self, name: &'a str) -> index::Binding {
-            let hypothetical_binding = self.0.len();
-            // SAFE: we keep indices unique through the HashMap.
-            unsafe {
-                index::Binding::from_index(*self.0.entry(name).or_insert(hypothetical_binding))
-            }
         }
     }
 
@@ -342,13 +330,6 @@ pub mod ir {
             let index = *self.labels.entry(label_name).or_insert(default_index);
             unsafe { index::Label::from_index(index) }
         }
-
-        fn get_label_index(&self, label_name: &'a str) -> Option<index::Label> {
-            self.labels
-                .get(&label_name)
-                .copied()
-                .map(|index| unsafe { index::Label::from_index(index) })
-        }
     }
 
     impl<'a> Default for LabelMap<'a> {
@@ -380,7 +361,7 @@ pub mod ir {
         } = expr
         {
             let mut args = args.into_iter();
-            let condition = Pure::from_ast(args.next().unwrap(), &binding_map, label_map);
+            let condition = Pure::from_ast(args.next().unwrap(), binding_map, label_map);
             let label_if_true =
                 expect_label_from_ast(args.next().expect("br-cond needs @true-label"), label_map);
             let label_if_false =
