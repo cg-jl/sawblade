@@ -1,0 +1,9 @@
+
+block %addone :: (%a) {
+  add %a 1
+}
+
+block "main" :: { return [rax] } {
+  %value = call @addone 10;
+  add 15 %value
+}
