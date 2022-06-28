@@ -7,6 +7,6 @@ fn main() {
 
     let ast = abism::ast::parse_source(&source);
     dbg!(&ast);
-    let ir = abism::ir::IR::<abism::ir::X86_64Nasm>::from_ast(ast);
+    let ir = abism::ir::IR::<abism::arch::X86_64Nasm>::from_ast(ast);
     dbg!(ir);
 }
