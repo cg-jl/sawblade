@@ -98,7 +98,24 @@ mkLabel (Label Export name) = pure $ AsmLabel name
 -- TODO : have a map to jump labels (bindings) and add to it here
 mkLabel (Label Bounded _) = labelGenNext
 
-asmBlock :: MonadState LabelGenerator m => MonadReader (Registry Abi) m => MonadWriter [Assembly] m => Block -> m ()
+-- TODO: sort the blocks in dependency order so that the most constrained are processed first
+-- and hints are given to the leaves:
+--  - grabs collisions between bindings of each block
+--  - grabs calls to other blocks (args/returns)
+--  - assigns forced ABI allocations for their blocks, emitting the block index and argument index
+--  - resolves minor allocations (noncolliding, collisions without any special bindings)
+--  - assigns Argument/Return allocation hints
+--  - resolves 'call collisions' for each argument/return:
+--    - grabs intersection of available non-repeating registers from each block
+--    - if intersection is null, then grab the next least-used register for the blocks
+--    - assign that register to that argument/return, registering it in the regspecs of each block
+
+asmBlock ::
+  MonadState LabelGenerator m =>
+  MonadReader (Registry Abi) m =>
+  MonadWriter [Assembly] m =>
+  Block ->
+  m ()
 asmBlock block = do
   allocs <- mkAllocs block
   -- if it's an exported block, add a `.global` directive

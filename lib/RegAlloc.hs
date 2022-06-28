@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -19,7 +18,6 @@ import Data.List
 import qualified Data.Map as Map
 import Data.Maybe
 import Debug.Trace
-import GHC.Natural
 import Repr
 
 -- TODO: walk the code and see how to unit test stuff.
@@ -82,7 +80,7 @@ allocFreeRegister binding already_allocated = do
   pure $ listToMaybe allowedRegisters
 
 -- lifetimes
-data Lifetime = Lifetime {lifetimeEnd :: Natural, lifetimeStart :: Natural}
+data Lifetime = Lifetime {lifetimeEnd :: Int, lifetimeStart :: Int}
 
 instance Show Lifetime where
   show (Lifetime end start) = unwords [show start, "-", show end]
@@ -108,14 +106,15 @@ Lifetime endA startA `collidesWith` Lifetime endB startB =
 
 type LifetimeMap = BindingMap Lifetime
 
-type HalfAssignedLifetimes = BindingMap Natural
+type HalfAssignedLifetimes = BindingMap Int
 
-endLife :: MonadState HalfAssignedLifetimes m => Binding -> m (Natural -> Lifetime)
+endLife :: MonadState HalfAssignedLifetimes m => Binding -> m (Int -> Lifetime)
 endLife name = do
   map <- get
-  let start = map Map.!? name <&> Lifetime
+  -- SAFE: binding must be present
+  let Just start = map Map.!? name <&> flip Lifetime
   modify' $ Map.delete name -- pop the element from the map
-  pure $ fromMaybe (join Lifetime) start
+  pure start
 
 valueBindings :: Value -> [Binding]
 valueBindings (Constants _) = []
@@ -131,18 +130,20 @@ opBindings :: Op -> OpBindings
 opBindings (Assign bindings value) = OpBindings bindings (valueBindings value)
 opBindings (Return bindings) = OpBindings [] bindings
 
-processOpBindings :: (MonadState HalfAssignedLifetimes m, MonadWriter [(Binding, Lifetime)] m) => Natural -> OpBindings -> m ()
+processOpBindings :: (MonadState HalfAssignedLifetimes m, MonadWriter [(Binding, Lifetime)] m) => Int -> OpBindings -> m ()
 processOpBindings index (OpBindings declared used) = do
-  -- set the lifetime start to all the declared bindings
-  startLifetimes <- traverse endLife declared <&> map ($ index) <&> zip declared
-  tell startLifetimes
+  -- all the used bindings are now destroyed, since their values have been consumed.
+  usedLifetimes <- traverse endLife used <&> map ($ index) <&> zip used
+  tell usedLifetimes
 
-  -- insert all the used bindnigs that weren't already used (map's <> operator keeps the already set keys)
-  let newBindings = Map.fromList $ map (,index) used
+  -- insert all the newly declared bindnigs
+  let newBindings = Map.fromList $ map (,index) declared
   modify' (<> newBindings)
 
 mkLifetimes :: Block -> LifetimeMap
-mkLifetimes (blockOps >>> map opBindings >>> zip [0 ..] >>> reverse -> indexedOps) =
-  let (leftBindings, foundEnds) = execRWS (traverse_ (uncurry processOpBindings) indexedOps) () Map.empty
+mkLifetimes block@(blockOps >>> map opBindings >>> zip [0 ..] -> indexedOps) =
+  -- all arguments get their lifetime start at -1.
+  let argBindings = Map.fromList $ map (,-1) (blockArgs block)
+      (leftBindings, foundEnds) = execRWS (traverse_ (uncurry processOpBindings) indexedOps) () argBindings
       unused = map (second (join Lifetime)) $ Map.toList leftBindings
    in Map.fromList $ unused <> foundEnds
