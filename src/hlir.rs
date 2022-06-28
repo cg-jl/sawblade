@@ -122,8 +122,8 @@ impl<Arch> Default for Spec<Arch> {
 
 #[derive(Debug)]
 pub struct AssignedBinding {
-    assign_index: usize,
-    binding: index::Binding,
+    pub assign_index: usize,
+    pub binding: index::Binding,
 }
 
 #[derive(Debug)]
