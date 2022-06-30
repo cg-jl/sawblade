@@ -1,3 +1,7 @@
+//! Thin `usize` wrappers that have their explicit meaning.
+//! They're always convertible back to a `usize` but they
+//! require using `unsafe` so that using them as bare indices to anything
+//! becomes a burde.
 
 use crate::arch;
 
