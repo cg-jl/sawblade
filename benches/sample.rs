@@ -1,11 +1,15 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 const SAMPLE: &str = include_str!("../examples/test.abism");
 
 pub fn parse_sample(c: &mut Criterion) {
-    c.bench_function("parse sample", |b| {
-        b.iter(|| abism::ast::parse_source(black_box(SAMPLE)))
+    let mut group = c.benchmark_group("Sample");
+    group.sample_size(SAMPLE.len());
+    group.throughput(criterion::Throughput::Bytes(SAMPLE.len() as u64));
+    group.bench_with_input(BenchmarkId::new("input", SAMPLE.len()), SAMPLE, |b, i| {
+        b.iter(|| abism::ast::parse_source(i));
     });
+    group.finish();
 }
 
 pub fn hlir_sample(c: &mut Criterion) {
