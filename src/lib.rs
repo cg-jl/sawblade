@@ -15,7 +15,7 @@ pub mod index;
 /// met in terms of constants and memory usage.
 ///
 /// It is also meant to favor further analysis from allocators.
-/// In particular, the `BucketBinding`s that we're using here
+/// In particular, the `bucket::Definition`s that we're using here
 /// are just a member short of the bindings that an allocator will
 /// use, which has a global insight on all the bindings used by all
 /// the blocks and how those bindings are used, e.g when passing bindings
@@ -39,20 +39,68 @@ pub mod optir {
     // allocated and deallocated exactly once. All the pushing was made
     // in HLIR. All the sizes are constant now.
 
-    pub struct BucketBinding {
-        pub bucket_index: usize,
-        pub index_inside_bucket: usize,
+    /// Binding storage related data.
+    ///
+    /// Bindings are stored into imaginary *buckets*, which
+    /// represent... well, the place they are stored in *physically*.
+    /// These physical places might be registers, memory slots, inside the CPU's flag register,
+    /// certain bits of a register...
+    /// A *bucket* may be shared by more than one binding if the results
+    /// they represent are proven to not exist at the same time (e.g each
+    /// binding was computed through exclusive branches).
+    /// These *buckets* can be used by allocators to easily build an
+    /// insight into aliasing between bindings.
+    ///
+    ///
+    /// # Notes
+    /// - Buckets themselves are not represented here since
+    /// they are of no use, only the indices of the positions of
+    /// and inside a bucket are appropiate.
+    ///
+    /// - All `usize`s and `u8`s here just represent
+    /// a unique identifier, they don't have any special meaning for the optimizer
+    /// or allocators, which don't really change those around. They are treated
+    /// by indices just by the assembly pass that needs to track what *real*
+    /// physical spaces contain those results.
+    pub mod bucket {
+        #[derive(Debug, Clone, Copy)]
+        pub enum UsageKind {
+            /// Requires a place that must **exclusively**
+            /// hold that result in any situation that executes
+            /// the statement where this usage applies.
+            Exclusive,
+            /// Requires a *bucket* where the place reserved to that
+            /// bucket might be used by other results since selecting
+            /// those means this binding doesn't exist, i.e used in selecting
+            /// branch results through phi nodes.
+            Selective { selection_bucket: u8 },
+        }
+        /// Describes how and where a binding is used.
+        #[derive(Debug, Clone, Copy)]
+        pub struct Usage {
+            pub usage_kind: UsageKind,
+            pub statement_index: usize,
+        }
+
+        /// Definition bucket
+        #[derive(Debug, Clone, Copy)]
+        pub struct Definition {
+            /// The statement index in which this binding was defined
+            pub statement_index: usize,
+            /// A secondary index to pin down the assignment order
+            pub statement_definition_index: usize,
+        }
     }
 
     pub struct Block {
-        /// Bindings are stored into imaginary "buckets".
-        /// Each *bucket* corresponds to one statement that defines them.
-        /// Each binding that is declared is assigned an index by HLIR, and
-        /// that index is the index into their *bucket*.
-        ///
-        /// These *buckets* can be used by allocators to easily build an
-        /// insight into aliasing between bindings.
-        pub binding_buckets: Vec<BucketBinding>,
+        /// Definition information where each binding is an index into
+        /// the Vec.
+        pub binding_defs: Vec<bucket::Definition>,
+        /// Usage information where each binding is an index into the outer
+        /// Vec. Each binding might have multiple usages, which represent
+        /// the need for the physical place that holds the binding to keep
+        /// holding it.
+        pub binding_usages: Vec<Vec<bucket::Usage>>,
         /// List of operations that describe *what* is the work being done.
         ///
         /// This is only used by the folding/optimization passes, because
@@ -65,6 +113,9 @@ pub mod optir {
         pub end: CFTransfer,
     }
 
+    /// A control end structure. Has a map of exported bindings so that
+    /// the allocator may use this for directly mapping two bindings from
+    /// distinct blocks to the same *bucket*.
     pub struct CFTransfer {
         /// A set of bindings that are used in other phi statements.
         /// In the source code phi nodes are identified by:
