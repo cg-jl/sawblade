@@ -1,7 +1,7 @@
 // Note: I'm building a fast parser that
 // doesn't give a fuck about spans.
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block<'a> {
     pub name: LinkageLabel<'a>,
     pub spec: Option<Spec<'a>>,
@@ -9,7 +9,7 @@ pub struct Block<'a> {
     pub stmts: Vec<Statement<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Spec<'a> {
     pub arguments: Option<Vec<&'a str>>,
     pub returns: Option<Vec<&'a str>>,
@@ -21,7 +21,7 @@ pub enum LinkageLabel<'a> {
     Internal(&'a str),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Statement<'a> {
     Assign {
         bindings: Vec<Lvalue<'a>>,
@@ -30,7 +30,7 @@ pub enum Statement<'a> {
     Return(Expr<'a>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr<'a> {
     Insn {
         name: &'a str,
@@ -55,7 +55,7 @@ impl<'a> Lvalue<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Rvalue<'a> {
     Label(&'a str),
     Constant(u64),
