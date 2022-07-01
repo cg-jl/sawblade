@@ -15,5 +15,6 @@ name = "abism"
 path = "src/lib.rs"
 
 [[bench]]
-name = "ast"
+name = "sample"
 harness = false
+
