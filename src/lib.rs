@@ -169,6 +169,7 @@ pub mod optir {
     /// are set to constants is handed to the Architecture's codegen
     /// implementation.
     pub enum Op {
+        Pure(u64),
         Phi(Vec<PhiSelector>),
         Call {
             label: index::Label,
