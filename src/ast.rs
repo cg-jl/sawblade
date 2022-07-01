@@ -47,7 +47,7 @@ pub enum Lvalue<'a> {
 
 impl<'a> Lvalue<'a> {
     #[inline]
-    pub fn name_if_not_ignored(&self) -> Option<&'a str> {
+    pub const fn name_if_not_ignored(&self) -> Option<&'a str> {
         match self {
             Self::Ignore => None,
             Self::Named(name) => Some(name),

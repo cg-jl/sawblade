@@ -368,20 +368,55 @@ impl Block {
         let assigns = stmts
             .into_iter()
             .map(|stmt| match stmt {
-                crate::ast::Statement::Assign { bindings, value } => Assignment {
-                    used_bindings: bindings
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(index, lvalue)| match lvalue {
-                            crate::ast::Lvalue::Ignore => None,
-                            crate::ast::Lvalue::Named(name) => Some(AssignedBinding {
-                                assign_index: index,
-                                binding: binding_map.expect_binding_index(name),
-                            }),
-                        })
-                        .collect(),
-                    value: expr_as_value(value, &binding_map, label_map),
-                },
+                crate::ast::Statement::Assign { bindings, value } => {
+                    let value = expr_as_value(value, &binding_map, label_map);
+                    let (used_bindings, value) = if let Value::Copied(copied) = value {
+                        // Ignore `Pure` values that were ignored
+                        let (used_bindings, values): (Vec<_>, Vec<_>) = bindings
+                            .into_iter()
+                            .zip(copied)
+                            .filter_map(|(lvalue, copied)| {
+                                lvalue
+                                    .name_if_not_ignored()
+                                    .map(|name| (binding_map.expect_binding_index(name), copied))
+                            })
+                            .unzip();
+
+                        (
+                            used_bindings
+                                .into_iter()
+                                .enumerate()
+                                .map(|(assign_index, binding)| AssignedBinding {
+                                    assign_index,
+                                    binding,
+                                })
+                                .collect(),
+                            Value::Copied(values),
+                        )
+                    } else {
+                        (
+                            bindings
+                                .into_iter()
+                                .enumerate()
+                                .filter_map(|(assign_index, lvalue)| {
+                                    lvalue
+                                        .name_if_not_ignored()
+                                        .map(|name| binding_map.expect_binding_index(name))
+                                        .map(move |binding| AssignedBinding {
+                                            assign_index,
+                                            binding,
+                                        })
+                                })
+                                .collect(),
+                            value,
+                        )
+                    };
+
+                    Assignment {
+                        used_bindings,
+                        value,
+                    }
+                }
                 // We'll have an ignored assignment
                 crate::ast::Statement::Return(value) => Assignment {
                     used_bindings: Vec::new(),
