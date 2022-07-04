@@ -306,6 +306,7 @@ impl Iterator for BindingRange {
 
 unsafe impl std::iter::TrustedLen for BindingRange {}
 impl std::iter::ExactSizeIterator for BindingRange {
+    #[inline]
     fn len(&self) -> usize {
         self.0.len()
     }

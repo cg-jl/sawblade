@@ -14,7 +14,11 @@ pub struct Register(usize);
 
 impl Register {
     pub fn from<A: arch::Architecture>(name: &str) -> Option<Self> {
-        A::index_from_register(name).map(Self)
+        A::index_from_register(name)
+    }
+    #[inline]
+    pub unsafe fn from_index(index: usize) -> Self {
+        Self(index)
     }
 }
 
