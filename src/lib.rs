@@ -8,4 +8,3 @@ pub mod ast;
 pub mod hlir;
 pub mod index;
 pub mod optir;
-pub mod util;

@@ -32,7 +32,7 @@ use std::{
     ops::Range,
 };
 
-use super::util::FixedArray;
+type FixedArray<T> = Box<[T]>;
 
 // NOTE: most of the `Vec`s here can be converted to arrays that are
 // allocated and deallocated exactly once. All the pushing was made
@@ -263,7 +263,7 @@ pub struct IR {
     /// Branching map that goes parent->child direction.
     pub forwards_branching_map: HashMap<index::Label, ForwardEdge>,
     /// Branching map that goes child->parent direction.
-    pub backwards_branching_map: HashMap<index::Label, Vec<index::Label>>,
+    pub backwards_branching_map: HashMap<index::Label, FixedArray<index::Label>>,
 }
 
 struct BlockBuilder {
@@ -387,7 +387,11 @@ impl BlockBuilder {
     }
 
     fn compile_copied(&mut self, pures: Vec<crate::hlir::Pure>) -> FixedArray<index::Binding> {
-        pures.into_iter().map(|pure| self.compile_pure(pure)).into()
+        pures
+            .into_iter()
+            .map(|pure| self.compile_pure(pure))
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 
     /// Compile a call operation.
@@ -404,11 +408,15 @@ impl BlockBuilder {
         let usage = unsafe { self.usage_for_next_op(bucket::UsageKind::Exclusive) };
 
         // 1. Transform all parameters into OPTIR bindings
-        let params = FixedArray::from(params.into_iter().map(|value| {
-            let param = self.compile_pure(value);
-            self.get_usage_bucket(param).push(usage);
-            param
-        }));
+        let params = params
+            .into_iter()
+            .map(|value| {
+                let param = self.compile_pure(value);
+                self.get_usage_bucket(param).push(usage);
+                param
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
 
         let result_start_index = self.binding_count;
         let definition =
@@ -432,7 +440,8 @@ impl BlockBuilder {
 
                         assign.assign_index
                     })
-                    .into()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
             }
             AssignedUsage::All => {
                 for _ in 0..target_return_count {
@@ -441,7 +450,9 @@ impl BlockBuilder {
                     }
                 }
 
-                (0..target_return_count).into()
+                (0..target_return_count)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
             }
         };
 
@@ -466,7 +477,12 @@ impl BlockBuilder {
         Block {
             arg_count: self.arg_count,
             binding_defs: self.binding_definitions.into(),
-            binding_usages: self.binding_usages.into_iter().map(FixedArray::from).into(),
+            binding_usages: self
+                .binding_usages
+                .into_iter()
+                .map(Vec::into_boxed_slice)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             call_return_usages: self.call_return_usages.into(),
             operations: self.ops.into(),
             end,
@@ -532,7 +548,7 @@ impl Block {
             crate::hlir::End::TailValue(value) => CFTransfer::Return(match value {
                 crate::hlir::Value::Copied(pures) => builder.compile_copied(pures),
                 crate::hlir::Value::Add { lhs, rest } => {
-                    FixedArray::single(builder.compile_add(lhs, rest))
+                    vec![builder.compile_add(lhs, rest)].into_boxed_slice()
                 }
                 crate::hlir::Value::Call { label, params } => builder
                     .compile_call(
@@ -541,7 +557,7 @@ impl Block {
                         AssignedUsage::All,
                         block_return_counts[unsafe { label.to_index() }],
                     )
-                    .into(),
+                    .collect::<Vec<_>>().into_boxed_slice(),
             }),
             crate::hlir::End::ConditionalBranch {
                 condition,
@@ -607,7 +623,12 @@ impl IR {
 
         let backwards_branching_map = backwards_branching_map
             .into_iter()
-            .map(|(label, set)| (label, set.into_iter().collect()))
+            .map(|(label, set)| {
+                (
+                    label,
+                    set.into_iter().collect::<Vec<_>>().into_boxed_slice(),
+                )
+            })
             .collect();
 
         Self {
@@ -685,7 +706,7 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
         }
     }
 
-    slice.into()
+    slice.into_boxed_slice()
 }
 
 // NOTE: specs aren't used by optimizers, they're used by allocators.
