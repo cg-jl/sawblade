@@ -557,9 +557,6 @@ impl Block {
                     target_if_false: label_if_false,
                 }
             }
-            crate::hlir::End::BlockIsEmpty => {
-                unreachable!("empty blocks should have been pruned earlier")
-            }
         };
 
         builder.release(end)
@@ -679,7 +676,6 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
                     continue;
                 }
             }
-            End::BlockIsEmpty => unreachable!("empty blocks should have been pruned earlier"),
         }
         if next.index < 10 {
             // note: 10 tries means 10! call chain depth, which is very very unlikely.

@@ -109,8 +109,6 @@ pub enum End {
         label_if_true: index::Label,
         label_if_false: index::Label,
     },
-    /// Happens when the block is empty.
-    BlockIsEmpty,
 }
 
 fn register_list_from_ast<'s, A: Architecture, L: IntoIterator<Item = &'s str>>(
@@ -329,40 +327,37 @@ impl Block {
         // re-declare as immutable
         let binding_map = binding_map;
 
-        let end = match stmts.pop() {
-            None => End::BlockIsEmpty,
-            Some(stmt) => match stmt {
-                crate::ast::Statement::Assign { bindings, value } => {
-                    // we're going to implicitly create a `Copied` tail value
-                    let assigned_bindings = bindings
-                        .iter()
-                        .copied()
-                        .filter_map(|lv| match lv {
-                            crate::ast::Lvalue::Ignore => None,
-                            crate::ast::Lvalue::Named(name) => {
-                                Some(binding_map.expect_binding_index(name))
-                            }
-                        })
-                        .map(Pure::Binding)
-                        .collect();
+        let end = match stmts.pop().expect("block should be non-empty") {
+            crate::ast::Statement::Assign { bindings, value } => {
+                // we're going to implicitly create a `Copied` tail value
+                let assigned_bindings = bindings
+                    .iter()
+                    .copied()
+                    .filter_map(|lv| match lv {
+                        crate::ast::Lvalue::Ignore => None,
+                        crate::ast::Lvalue::Named(name) => {
+                            Some(binding_map.expect_binding_index(name))
+                        }
+                    })
+                    .map(Pure::Binding)
+                    .collect();
 
-                    // push the assignment back
-                    stmts.push(crate::ast::Statement::Assign { bindings, value });
+                // push the assignment back
+                stmts.push(crate::ast::Statement::Assign { bindings, value });
 
-                    End::TailValue(Value::Copied(assigned_bindings))
+                End::TailValue(Value::Copied(assigned_bindings))
+            }
+            // TODO: check if the return value is a `br` insn
+            crate::ast::Statement::Return(expr) => {
+                match expr_as_br_cond(expr, &binding_map, label_map) {
+                    Ok((condition, label_if_true, label_if_false)) => End::ConditionalBranch {
+                        condition,
+                        label_if_true,
+                        label_if_false,
+                    },
+                    Err(other) => End::TailValue(expr_as_value(other, &binding_map, label_map)),
                 }
-                // TODO: check if the return value is a `br` insn
-                crate::ast::Statement::Return(expr) => {
-                    match expr_as_br_cond(expr, &binding_map, label_map) {
-                        Ok((condition, label_if_true, label_if_false)) => End::ConditionalBranch {
-                            condition,
-                            label_if_true,
-                            label_if_false,
-                        },
-                        Err(other) => End::TailValue(expr_as_value(other, &binding_map, label_map)),
-                    }
-                }
-            },
+            }
         };
 
         let assigns = stmts
