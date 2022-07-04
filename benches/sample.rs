@@ -19,5 +19,13 @@ pub fn hlir_sample(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, parse_sample, hlir_sample);
+pub fn optir_sample(c: &mut Criterion) {
+    let ir = abism::hlir::IR::<abism::arch::X86_64Nasm>::from_ast(abism::ast::parse_source(SAMPLE));
+    c.bench_function("HLIR to OPTIR", |b| b.iter(|| {
+        let blocks = ir.blocks.clone();
+        abism::optir::dissect_from_hlir(black_box(blocks))
+    }));
+}
+
+criterion_group!(benches, parse_sample, hlir_sample, optir_sample);
 criterion_main!(benches);

@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, LinkageLabel, Lvalue, Rvalue, Statement};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     // arguments
     pub gets: Vec<index::Binding>,
@@ -52,19 +52,19 @@ impl<Arch> Default for Spec<Arch> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct AssignedBinding {
     pub assign_index: usize,
     pub binding: index::Binding,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Assignment {
     pub used_bindings: Vec<AssignedBinding>,
     pub value: Value,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Copied(Vec<Pure>),
     Add {
@@ -78,7 +78,7 @@ pub enum Value {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Pure {
     Binding(index::Binding),
     Label(index::Label),
@@ -101,7 +101,7 @@ impl Pure {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum End {
     TailValue(Value),
     ConditionalBranch {

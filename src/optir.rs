@@ -97,7 +97,7 @@ pub mod bucket {
     }
 
     /// Describes how and/or where a binding is defined
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub enum Definition {
         Argument(usize),
         Op(usize),
@@ -108,6 +108,7 @@ pub mod bucket {
 /// in all the values but just define some of them.
 /// Here's how we keep this information handy for the
 /// allocators:
+#[derive(Debug)]
 pub struct CallReturnUsage {
     /// A list of the results that we're interested in,
     /// out of all the results that the call may spit out
@@ -119,6 +120,7 @@ pub struct CallReturnUsage {
     pub called_label: index::Label,
 }
 
+#[derive(Debug)]
 pub struct Block {
     /// Argument count that the block accepts.
     /// Used for ease of access into buckets, since
@@ -161,7 +163,7 @@ pub type ExportedBindings = HashMap<index::Label, FixedArray<index::Binding>>;
 /// as empty blocks and inline wherever they're used to a no-op. They
 /// don't return anything so a checker pass will catch anything that is
 /// bound to them.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum CFTransfer {
     /// Return a set of values back to the caller.
     /// It's like a direct branch, except the target label
@@ -180,6 +182,7 @@ pub enum CFTransfer {
     },
 }
 
+#[derive(Debug)]
 pub struct PhiSelector {
     /// (small) list of bindings that the phi
     /// descriptor might consume, depending on the
@@ -201,6 +204,7 @@ pub struct PhiSelector {
 /// instructions (to optimize for use and space), a map of what bindings
 /// are set to constants is handed to the Architecture's codegen
 /// implementation.
+#[derive(Debug)]
 pub enum Op {
     Constant(Constant),
     Phi(FixedArray<PhiSelector>),
@@ -257,6 +261,7 @@ pub enum ForwardEdge {
        // the map results in better performance.
 }
 
+#[derive(Debug)]
 pub struct IR {
     pub blocks: Vec<Block>,
     /// Branching map that goes parent->child direction.
@@ -272,7 +277,6 @@ struct BlockBuilder {
     binding_definitions: Vec<bucket::Definition>,
     binding_usages: Vec<Vec<bucket::Usage>>,
     call_return_usages: Vec<CallReturnUsage>,
-    binding_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -321,6 +325,11 @@ impl BlockBuilder {
         self.hlir_results.insert(hlir_target, self_target);
     }
 
+    #[inline]
+    fn binding_count(&self) -> usize {
+        self.binding_definitions.len()
+    }
+
     /// Converts an HLIR definition into an OPTIR definition.
     fn compile_pure(&mut self, hlir_value: crate::hlir::Pure) -> index::Binding {
         match Constant::try_from(hlir_value) {
@@ -343,7 +352,7 @@ impl BlockBuilder {
     /// # Safety
     /// The given definition must be a valid index into the ops vec
     unsafe fn new_binding(&mut self, definition: bucket::Definition) -> index::Binding {
-        let index = self.binding_usages.len();
+        let index = self.binding_definitions.len();
         self.binding_definitions.push(definition);
         self.binding_usages.push(Vec::new());
         unsafe { index::Binding::from_index(index) }
@@ -418,7 +427,7 @@ impl BlockBuilder {
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
-        let result_start_index = self.binding_count;
+        let result_start_index = self.binding_count();
         let definition =
             bucket::Definition::Op(unsafe { usage.index.as_index().unwrap_unchecked() });
 
@@ -456,7 +465,7 @@ impl BlockBuilder {
             }
         };
 
-        let result_binding_range = BindingRange(result_start_index..self.binding_count);
+        let result_binding_range = BindingRange(result_start_index..self.binding_count());
 
         self.push_op(Op::Call {
             label,
@@ -500,14 +509,19 @@ impl Block {
         // we're inserting them in **the same order**.
 
         let mut builder = BlockBuilder {
-            hlir_results: HashMap::new(),
+            hlir_results: (0..hlir_block.gets.len())
+                .map(|x| {
+                    // SAFE: argument bindings are marked first in `binding_definitions`
+                    let binding_for_both = unsafe { index::Binding::from_index(x) };
+                    (binding_for_both, binding_for_both)
+                })
+                .collect(),
             ops: Vec::new(), // NOTE: we can have a pre-estimate about how many ops from a quick
             // scan of the assignments
             arg_count: hlir_block.gets.len(),
             binding_definitions: arg_buckets.collect(),
             call_return_usages: Vec::new(),
-            binding_usages: Vec::new(),
-            binding_count: 0,
+            binding_usages: (0..hlir_block.gets.len()).map(|_| Vec::new()).collect(),
         };
 
         // compile down HLIR values into separate ops
