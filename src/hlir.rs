@@ -425,9 +425,9 @@ impl Block {
 }
 
 pub struct IR<'src, Arch> {
-    label_map: LabelMap<'src>,
-    blocks: Vec<Block>,
-    specs: Vec<Spec<Arch>>,
+    pub label_map: LabelMap<'src>,
+    pub blocks: Vec<Block>,
+    pub specs: Vec<Spec<Arch>>,
 }
 
 // ... I'm getting tired of automatic deriving telling Arch: Debug

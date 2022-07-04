@@ -28,7 +28,6 @@
 use super::index;
 use std::{
     collections::{HashMap, HashSet},
-    mem::MaybeUninit,
     ops::Range,
 };
 
@@ -280,7 +279,7 @@ struct BlockBuilder {
 pub struct BindingRange(Range<usize>);
 
 impl BindingRange {
-    const fn single(binding: index::Binding) -> Self {
+    pub const fn single(binding: index::Binding) -> Self {
         // SAFE: we're going to return it as a binding later
         let index = unsafe { binding.to_index() };
         Self(index..index + 1)
@@ -345,6 +344,7 @@ impl BlockBuilder {
     /// The given definition must be a valid index into the ops vec
     unsafe fn new_binding(&mut self, definition: bucket::Definition) -> index::Binding {
         let index = self.binding_usages.len();
+        self.binding_definitions.push(definition);
         self.binding_usages.push(Vec::new());
         unsafe { index::Binding::from_index(index) }
     }
@@ -499,18 +499,6 @@ impl Block {
         // SAFE: using the binding indices produced by HLIR is fine,
         // we're inserting them in **the same order**.
 
-        // TODO: mark bindings as either from source or generated?
-        // for debugging purposes... maybe behing a #[cfg]?
-        let mut current_binding_count = hlir_block.gets.len()
-            + hlir_block
-                .assigns
-                .last()
-                .and_then(|stmt| stmt.used_bindings.last())
-                // SAFE: we're taking the last index because we know it's going to be
-                // the last defined binding.
-                .map(|binding| unsafe { binding.binding.to_index() })
-                .unwrap_or(0);
-
         let mut builder = BlockBuilder {
             hlir_results: HashMap::new(),
             ops: Vec::new(), // NOTE: we can have a pre-estimate about how many ops from a quick
@@ -539,8 +527,28 @@ impl Block {
                         }
                     }
                 }
-                Value::Add { lhs, rest } => todo!(),
-                Value::Call { label, params } => todo!(),
+                Value::Add { lhs, rest } => {
+                    // Since adding is a pure operation (can't access any
+                    // other data), we'll skip compiling this if there is no
+                    // target
+                    if let Some(crate::hlir::AssignedBinding {
+                        binding: target, ..
+                    }) = assignment.used_bindings.into_iter().next()
+                    {
+                        let result = builder.compile_add(lhs, rest);
+                        unsafe {
+                            builder.register_result(target, result);
+                        }
+                    }
+                }
+                Value::Call { label, params } => {
+                    builder.compile_call(
+                        label,
+                        params,
+                        AssignedUsage::Specific(assignment.used_bindings),
+                        block_return_counts[unsafe { label.to_index() }],
+                    );
+                }
             }
         }
 
@@ -557,7 +565,8 @@ impl Block {
                         AssignedUsage::All,
                         block_return_counts[unsafe { label.to_index() }],
                     )
-                    .collect::<Vec<_>>().into_boxed_slice(),
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
             }),
             crate::hlir::End::ConditionalBranch {
                 condition,
@@ -639,6 +648,15 @@ impl IR {
     }
 }
 
+pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> IR {
+    let return_counts = compute_return_counts(&blocks);
+    let compiled_blocks = blocks
+        .into_iter()
+        .map(|block| Block::from_hlir_block(block, &return_counts))
+        .collect();
+    IR::from_blocks(compiled_blocks)
+}
+
 fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
     use crate::hlir::End;
     use std::collections::VecDeque;
@@ -698,7 +716,7 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
                 }
             }
         }
-        if next.index < 10 {
+        if next.tries < 10 {
             // note: 10 tries means 10! call chain depth, which is very very unlikely.
             // I'll just won't continue this one and leave it as zero.
             // TODO: result to indicate that there is a call chain loop
