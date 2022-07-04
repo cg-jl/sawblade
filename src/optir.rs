@@ -31,7 +31,7 @@ use std::{
     ops::Range,
 };
 
-type FixedArray<T> = Box<[T]>;
+pub type FixedArray<T> = Box<[T]>;
 
 // NOTE: most of the `Vec`s here can be converted to arrays that are
 // allocated and deallocated exactly once. All the pushing was made
