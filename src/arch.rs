@@ -1,28 +1,67 @@
+use bitflags::bitflags;
 use std::ops::Range;
 
 use crate::index;
 
 pub trait Architecture {
     fn index_from_register(name: &str) -> Option<index::Register>;
-    fn capabilities_set() -> RegisterCapabilitiesSet;
+    fn register_set() -> RegisterSet;
 }
 
 // TODO: callee/caller reserved registers
 
-pub struct RegisterCapabilitiesSet {
-    pub regular_registers: Range<index::Register>,
+pub struct RegisterSet {
+    /// Registers that are used without any speacial meaning.
+    /// They're called "general purpose" (abbreviated to gp)
+    /// registers.
+    pub gp_registers: Range<index::Register>,
+    /// The stack pointer. Points to the "top" of the memory stack,
+    /// that is, the minimum memory address valid for the current routine's
+    /// frame (which is the top of the running stack)
     pub stack_pointer: Option<index::Register>,
+    /// The frame pointer is similar to the stack pointer, except it points
+    /// to the "next" frame from the top of the stack, or the bottom of the current
+    /// routine's frame. It's useful to generate stacktraces, but if specified we
+    /// can also use it to need a smaller offset for an address (smaller in absolute value).
+    /// At least the frame pointer or the stack pointer is needed to enable static memory
+    /// allocation, since the place of one can be inferred from the other and the frame size
     pub frame_pointer: Option<index::Register>,
+    /// CPU status flags that are written in some circumstances.
+    /// They are currently four: **N**egative, **C**arry, O**V**erflow, **Z**ero.
+    /// They are used by the "flag allocator", which looks at the operation that
+    /// defines a binding, and if it knows e.g that the binding is just used to branch,
+    /// it will reserve a "it's in a branching flag" state for the binding, so that in
+    /// practice we won't need more compare instrucions to branch.
+    pub status_flags: FlagSet,
+    /// The flags register contains the bits for the CPU status flags. It is currently
+    /// not considered for storing values, but if present it will enable
+    /// storing certain checks to be reused by further conditional set/branch
+    /// instructions.
+    ///
+    /// Note that not having this register specified doesn't disable the flag-based
+    /// allocator, which is toggled by the [`status_flags`](RegisterSet::status_flags)
+    /// property. It does remove the possibility of overwriting the flags for even cheaper
+    /// conditional sets.
     pub flags_register: Option<index::Register>,
 }
 
-impl RegisterCapabilitiesSet {
-    pub const fn new(regular_registers: Range<index::Register>) -> Self {
+bitflags! {
+    pub struct FlagSet: u8 {
+        const NEGATIVE = 0b0001;
+        const CARRY = 0b0010;
+        const OVERFLOW = 0b0100;
+        const ZERO = 0b1000;
+    }
+}
+
+impl RegisterSet {
+    pub const fn new(gp_registers: Range<index::Register>) -> Self {
         Self {
-            regular_registers,
+            gp_registers,
             stack_pointer: None,
             frame_pointer: None,
             flags_register: None,
+            status_flags: FlagSet::empty(),
         }
     }
     pub const fn with_stack_pointer(mut self, stack_pointer: index::Register) -> Self {
@@ -35,6 +74,10 @@ impl RegisterCapabilitiesSet {
     }
     pub const fn with_flags_register(mut self, flags_register: index::Register) -> Self {
         self.flags_register = Some(flags_register);
+        self
+    }
+    pub fn with_status_flags(mut self, status_flags: FlagSet) -> Self {
+        self.status_flags |= status_flags;
         self
     }
 }
@@ -120,10 +163,11 @@ impl Architecture for X86_64Nasm {
         };
         Some(e.as_index())
     }
-    fn capabilities_set() -> RegisterCapabilitiesSet {
+    fn register_set() -> RegisterSet {
         use x86_64_nasm::Register;
-        RegisterCapabilitiesSet::new(Register::Rax.as_index()..Register::R15.as_index())
+        RegisterSet::new(Register::Rax.as_index()..Register::R15.as_index())
             .with_stack_pointer(Register::Rsp.as_index())
             .with_frame_pointer(Register::Rbp.as_index())
+            .with_status_flags(FlagSet::all())
     }
 }

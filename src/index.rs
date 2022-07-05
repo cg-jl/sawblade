@@ -17,7 +17,7 @@ impl Register {
         A::index_from_register(name)
     }
     #[inline]
-    pub unsafe fn from_index(index: usize) -> Self {
+    pub const unsafe fn from_index(index: usize) -> Self {
         Self(index)
     }
 }
