@@ -672,6 +672,7 @@ pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> IR {
     IR::from_blocks(compiled_blocks)
 }
 
+// NOTE: zero counts might just be that they're a loop
 fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
     use crate::hlir::End;
     use std::collections::VecDeque;
@@ -734,7 +735,6 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
         if next.tries < 10 {
             // note: 10 tries means 10! call chain depth, which is very very unlikely.
             // I'll just won't continue this one and leave it as zero.
-            // TODO: result to indicate that there is a call chain loop
             queue.push_back(next);
         }
     }

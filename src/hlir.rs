@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, LinkageLabel, Lvalue, Rvalue, Statement};
 
+// TODO: Convert tail calls with single parent-child relationship to jumps
+
 #[derive(Debug, Clone)]
 pub struct Block {
     // arguments
