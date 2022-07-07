@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::arch::{Architecture, RegisterSet};
 
 use crate::hlir::Spec;
