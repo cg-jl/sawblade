@@ -373,6 +373,7 @@ impl<'a> Parser<'a> {
             // SAFE: current is whitespace returns true only when
             // there's a Some.
             had_newline |= unsafe { self.current().unwrap_unchecked() } == '\n';
+            self.accept();
         }
 
         had_newline
