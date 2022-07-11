@@ -151,7 +151,7 @@ pub struct Block {
 
 /// A set of bindings that are used in other phi statements.
 /// In the source code phi nodes are identified by:
-/// ```abism
+/// ```sawblade
 /// %a = phi @from-1:[%hello] @from-2:[%world] ...
 /// ```
 /// Those are converted to exported bindings here, and they may have

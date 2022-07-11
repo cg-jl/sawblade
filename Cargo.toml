@@ -1,5 +1,5 @@
 [package]
-name = "abism"
+name = "sawblade"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,7 +12,7 @@ bitflags = "1.3.2"
 criterion = "0.3.5"
 
 [lib]
-name = "abism"
+name = "sawblade"
 path = "src/lib.rs"
 
 [[bench]]

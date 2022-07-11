@@ -1,6 +1,11 @@
-# abism
+# sawblade
 
-Abism is a compiler backend, like qbe/LLVM, but in full amateur mode. It currently works very barely but is able to output valid x86_64 assembly code.
+Sawblade is a compiler backend, like qbe/LLVM. It currently works very barely but is able to output valid x86_64 assembly code.
+I'm building Sawblade not just to work the way I want, but also as *fast* as I can make it, removing all loop invariants and
+have analysis information easily accessible, avoiding computing stuff twice...
+
+Sawblade is designed to cut through code like it's butter, or jump out untouched, which *may* cause injuries. 
+Kinda like a sawblade when cutting through tough materials.
 
 ## Notes
 
@@ -8,10 +13,10 @@ Abism is a compiler backend, like qbe/LLVM, but in full amateur mode. It current
 
 ## Design Idea & Spec
 
-The name  'Abism' is a mix between 'abi' and 'asm'. The main idea is to be able to specify exactly how pieces of code interface with each other, and let it decide
+The main idea is to be able to specify exactly how pieces of code interface with each other, and let it decide
 the registers/flags/memory it uses for the final assembly. 
 
-Abism works on blocks. For each block, you can have it return (maybe with some data), or branch to another block (maybe conditionally). Each block can be specified
+Sawblade works on blocks. For each block, you can have it return (maybe with some data), or branch to another block (maybe conditionally). Each block can be specified
 as a 'function' by adding arguments to it, which enables a special `call` instruction to it. For calls and returns, ABIs can be specified, that is, you can tell the
 backend what registers to use for arguments and/or returns, what registers should the block preserve, and anything that is returned through a stack-like pointer. ABIs can
 be omitted for callable blocks if they are not exported, because the ABI can be inferred after binding allocation.
@@ -20,33 +25,33 @@ be omitted for callable blocks if they are not exported, because the ABI can be 
 ABIs can be either put inline in the block definition or written separately:
 
 
-```abism
+```sawblade
 abi C { return : int [ rax ... ]; ...  }
 
 block "main" :: C { ... }
 ```
 
-```abism
+```sawblade
 block "main" :: { return : int [ rax ]; } { ... }
 ```
 
 
-Abism is an SSA-based language, where each 'binding' can only be defined once per block, and each binding is local to the block. 
-Each abism statement is one of three:
+Sawblade is an SSA-based language, where each 'binding' can only be defined once per block, and each binding is local to the block. 
+Each sawblade statement is one of three:
 
   - Assignment: define one (or more) bindings with an operation:
-    ```abism
+    ```sawblade
     %a %b %c = call "myfunction";
     ```
   - Return: return those bindings as the block's result:
-    ```abism
+    ```sawblade
     %a %b %c
     ```
   - Branch: conditionally or not, to another block:
-    ```abism
+    ```sawblade
     br @loop_end
     ```
-    ```abism
+    ```sawblade
     br %flag @loop_body @loop_end
     ```
 
@@ -61,13 +66,13 @@ If none of those are explicitly stated, returning a value is the implicit thing.
 in that statement, those bindings will be used as the return values (you can ignore part of an instruction's result):
 
 - Here, `%ret-code` will be used as the return value
-```abism
+```sawblade
 block %main {
   %ret-code = 0;
 }
 ```
 - Here, everything that `myfunction` returns is returned. If a different return spec is given, the backend will make sure to properly convert from one spec to another.
-```abism
+```sawblade
 block %main {
   call "myfunction"
 }
@@ -82,7 +87,7 @@ Last, but not least, explicit (callable or not) labels can be specified, with an
 call to that label will implicitly follow that ABI. If an ABI is not specified for a callable label, each call to it will be able to specify their own abi to call it with. Yes, it is unsafe, as this
 project is not designed to write safe code, but rather to explore what can be done with a generator without going straight into assembly.
 
-```abism
+```sawblade
 label "memcpy" ([int, int] -> [int]);
 ```
 
@@ -90,10 +95,10 @@ Work will be done to narrow down on labels once they're being implemented.
 
 ## State of the art
 
-Right now Abism is a baby project. It will only parse one block, expecting it to have an ABI (without checking).
+Right now Sawblade is a baby project. It will only parse one block, expecting it to have an ABI (without checking).
 It doesn't support calls or anything else besides returning and assigning constants.
 
 
 ## Working example(s)
 
-- [examples/test.abism](./examples/test.abism): The initial test, defines a block to be exported which returns some constants on predefined registers.
+- [examples/test.sawblade](./examples/test.sawblade): The initial test, defines a block to be exported which returns some constants on predefined registers.
