@@ -95,8 +95,11 @@ Work will be done to narrow down on labels once they're being implemented.
 
 ## State of the art
 
-Right now Sawblade is a baby project. It will only parse one block, expecting it to have an ABI (without checking).
-It doesn't support calls or anything else besides returning and assigning constants.
+Right now Sawblade is a baby project. It will parse a given amount of blocks, and convert them all the way to its OPTIR representation.
+Sawblade parser skips anything that it can't recognise first try, jumping out in the shortest time possible. This is what I mean by *jump out untouched*.
+Current OPTIR & HLIR use panics when input is malformed beyond syntax, it will be changed to return an Option. Result would've been good if we weren't going
+to ignore the errors anyway.
+I'm working in fuzzing Sawblade's input processing so I can make sure it doesn't trip up.
 
 
 ## Working example(s)
