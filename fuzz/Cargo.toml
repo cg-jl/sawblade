@@ -21,8 +21,8 @@ members = ["."]
 
 
 [[bin]]
-name = "sawblade"
-path = "fuzz_targets/sawblade.rs"
+name = "text_to_ast"
+path = "fuzz_targets/text_to_ast.rs"
 test = false
 doc = false
 
