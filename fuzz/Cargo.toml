@@ -19,6 +19,12 @@ features = ["arbitrary"]
 [workspace]
 members = ["."]
 
+[[bin]]
+name = "hlir_to_optir"
+path = "fuzz_targets/hlir_to_optir.rs"
+test = false
+doc = false
+
 
 [[bin]]
 name = "text_to_ast"

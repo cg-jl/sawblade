@@ -37,6 +37,8 @@ pub type FixedArray<T> = Box<[T]>;
 // allocated and deallocated exactly once. All the pushing was made
 // in HLIR. All the sizes are constant now.
 
+// TODO: group blocks in CFGs by usage?
+
 /// Binding storage related data.
 ///
 /// Bindings are stored into imaginary *buckets*, which
@@ -332,12 +334,12 @@ impl BlockBuilder {
     }
 
     /// Converts an HLIR definition into an OPTIR definition.
-    fn compile_pure(&mut self, hlir_value: crate::hlir::Pure) -> index::Binding {
+    fn compile_pure(&mut self, hlir_value: crate::hlir::Pure) -> Option<index::Binding> {
         match Constant::try_from(hlir_value) {
             // If it's a constant, then we'll have to define a new op
-            Ok(constant) => self.define(Op::Constant(constant)),
+            Ok(constant) => Some(self.define(Op::Constant(constant))),
             // We'll grab the already defined result
-            Err(alias) => self.hlir_results[&alias],
+            Err(alias) => self.hlir_results.get(&alias).copied(),
         }
     }
 
@@ -381,38 +383,42 @@ impl BlockBuilder {
         &mut self,
         lhs: crate::hlir::Pure,
         rest: Vec<crate::hlir::Pure>,
-    ) -> index::Binding {
+    ) -> Option<index::Binding> {
         // 1. Convert current lhs to an OPTIR binding
         // 2. For each rhs in the arguments:
         rest.into_iter().fold(self.compile_pure(lhs), |lhs, rhs| {
-            // 2.a Convert rhs to an OPTIR binding
-            let rhs = self.compile_pure(rhs);
-            // 2.b Register usage of current lhs  and rhs for this compute op
-            let usage = unsafe { self.usage_for_next_op(bucket::UsageKind::Exclusive) };
-            self.get_usage_bucket(lhs).push(usage);
-            self.get_usage_bucket(rhs).push(usage);
-            // 2.c Define next lhs to be the result of adding current lhs and rhs
-            self.define(Op::Add { lhs, rhs })
+            lhs.and_then(|lhs| {
+                // 2.a Convert rhs to an OPTIR binding
+                let rhs = self.compile_pure(rhs)?;
+                // 2.b Register usage of current lhs  and rhs for this compute op
+                let usage = unsafe { self.usage_for_next_op(bucket::UsageKind::Exclusive) };
+                self.get_usage_bucket(lhs).push(usage);
+                self.get_usage_bucket(rhs).push(usage);
+                // 2.c Define next lhs to be the result of adding current lhs and rhs
+                Some(self.define(Op::Add { lhs, rhs }))
+            })
         })
     }
 
-    fn compile_copied(&mut self, pures: Vec<crate::hlir::Pure>) -> FixedArray<index::Binding> {
+    fn compile_copied(
+        &mut self,
+        pures: Vec<crate::hlir::Pure>,
+    ) -> Option<FixedArray<index::Binding>> {
         pures
             .into_iter()
             .map(|pure| self.compile_pure(pure))
-            .collect::<Vec<_>>()
-            .into_boxed_slice()
+            .collect::<Option<Vec<_>>>()
+            .map(Vec::into_boxed_slice)
     }
 
     /// Compile a call operation.
-    /// If `specific_usage` is `None`, then
     fn compile_call(
         &mut self,
         label: index::Label,
         params: Vec<crate::hlir::Pure>,
         assigned_usage: AssignedUsage,
         target_return_count: usize,
-    ) -> BindingRange {
+    ) -> Option<BindingRange> {
         // SAFE: we're pushing the operation later, when we finish assigning
         // all the usages
         let usage = unsafe { self.usage_for_next_op(bucket::UsageKind::Exclusive) };
@@ -421,12 +427,12 @@ impl BlockBuilder {
         let params = params
             .into_iter()
             .map(|value| {
-                let param = self.compile_pure(value);
+                let param = self.compile_pure(value)?;
                 self.get_usage_bucket(param).push(usage);
-                param
+                Some(param)
             })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
+            .collect::<Option<Vec<_>>>()
+            .map(Vec::into_boxed_slice)?;
 
         let result_start_index = self.binding_count();
         let definition =
@@ -480,7 +486,7 @@ impl BlockBuilder {
             called_label: label,
         });
 
-        result_binding_range
+        Some(result_binding_range)
     }
 
     fn release(self, end: CFTransfer) -> Block {
@@ -501,7 +507,10 @@ impl BlockBuilder {
 }
 
 impl Block {
-    fn from_hlir_block(hlir_block: super::hlir::Block, block_return_counts: &[usize]) -> Self {
+    fn from_hlir_block(
+        hlir_block: super::hlir::Block,
+        block_return_counts: &[usize],
+    ) -> Option<Self> {
         // 1. Create the definitions
         // NOTE: I'm only using `gets` for its length... Maybe storing those arguments knowing
         // they're the first ones... welp
@@ -530,7 +539,7 @@ impl Block {
             use crate::hlir::Value;
             match assignment.value {
                 Value::Copied(copied) => {
-                    let results = builder.compile_copied(copied);
+                    let results = builder.compile_copied(copied)?;
                     for (target, result) in assignment
                         .used_bindings
                         .into_iter()
@@ -550,7 +559,7 @@ impl Block {
                         binding: target, ..
                     }) = assignment.used_bindings.into_iter().next()
                     {
-                        let result = builder.compile_add(lhs, rest);
+                        let result = builder.compile_add(lhs, rest)?;
                         unsafe {
                             builder.register_result(target, result);
                         }
@@ -569,9 +578,9 @@ impl Block {
 
         let end = match hlir_block.end {
             crate::hlir::End::TailValue(value) => CFTransfer::Return(match value {
-                crate::hlir::Value::Copied(pures) => builder.compile_copied(pures),
+                crate::hlir::Value::Copied(pures) => builder.compile_copied(pures)?,
                 crate::hlir::Value::Add { lhs, rest } => {
-                    vec![builder.compile_add(lhs, rest)].into_boxed_slice()
+                    vec![builder.compile_add(lhs, rest)?].into_boxed_slice()
                 }
                 crate::hlir::Value::Call { label, params } => builder
                     .compile_call(
@@ -579,7 +588,7 @@ impl Block {
                         params,
                         AssignedUsage::All,
                         block_return_counts[unsafe { label.to_index() }],
-                    )
+                    )?
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             }),
@@ -588,7 +597,7 @@ impl Block {
                 label_if_true,
                 label_if_false,
             } => {
-                let condition = builder.compile_pure(condition);
+                let condition = builder.compile_pure(condition)?;
                 CFTransfer::ConditionalBranch {
                     // TODO: grab exported bindings from conditionals
                     exported_bindings: HashMap::new(),
@@ -599,7 +608,7 @@ impl Block {
             }
         };
 
-        builder.release(end)
+        Some(builder.release(end))
     }
 }
 
@@ -663,22 +672,130 @@ impl IR {
     }
 }
 
-pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> IR {
-    let return_counts = compute_return_counts(&blocks);
-    let compiled_blocks = blocks
-        .into_iter()
-        .map(|block| Block::from_hlir_block(block, &return_counts))
-        .collect();
-    IR::from_blocks(compiled_blocks)
+trait MoveLabel {
+    /// "Moves" or renames a label.
+    /// # Safety
+    /// - the new label must not clash with existing labels.
+    /// - the block referred to by the old label must not be in use
+    /// by any other.
+    unsafe fn move_label(&mut self, previous: index::Label, next: index::Label);
 }
 
+impl MoveLabel for index::Label {
+    #[inline]
+    unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
+        if self == &previous {
+            *self = next;
+        }
+    }
+}
+
+impl MoveLabel for PhiSelector {
+    #[inline]
+    unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
+        unsafe {
+            self.block_from.move_label(previous, next);
+        }
+    }
+}
+
+impl MoveLabel for Constant {
+    unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
+        match self {
+            Constant::Numeric(_) => (),
+            Constant::Label(label) => unsafe { label.move_label(previous, next) },
+        }
+    }
+}
+
+impl MoveLabel for Op {
+    unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
+        match self {
+            Op::Constant(c) => unsafe { c.move_label(previous, next) },
+            Op::Phi(nodes) => nodes
+                .iter_mut()
+                .for_each(|node| unsafe { node.move_label(previous, next) }),
+            Op::Call {
+                label,
+                args: _,
+                usage_info_index: _,
+            } => unsafe { label.move_label(previous, next) },
+            Op::Add { lhs: _, rhs: _ } => (),
+        }
+    }
+}
+
+impl MoveLabel for Block {
+    unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
+        match &mut self.end {
+            CFTransfer::Return(_) => (),
+            CFTransfer::DirectBranch {
+                target,
+                exported_bindings: _,
+            } => unsafe { target.move_label(previous, next) },
+            CFTransfer::ConditionalBranch {
+                exported_bindings: _,
+                condition_source: _,
+                target_if_true,
+                target_if_false,
+            } => unsafe {
+                target_if_true.move_label(previous, next);
+                target_if_false.move_label(previous, next);
+            },
+        }
+        for op in self.operations.iter_mut() {
+            unsafe {
+                op.move_label(previous, next);
+            }
+        }
+    }
+}
+
+pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> Option<IR> {
+    use std::collections::BinaryHeap;
+    let (return_counts, malformed_branches) = compute_return_counts(&blocks);
+
+    let mut compiled_blocks = blocks
+        .into_iter()
+        .map(|block| Block::from_hlir_block(block, &return_counts))
+        .collect::<Option<Vec<_>>>()?;
+
+    // being a max-heap, we'll have max indices first
+    let malformed_branches = BinaryHeap::from_iter(malformed_branches.into_iter());
+
+    for remove_index in malformed_branches.into_iter_sorted() {
+        // offset labels back one by one
+        for move_index in remove_index..compiled_blocks.len().saturating_sub(1) {
+            // SAFE: we're using block indices, so these are true labels.
+            let old_label = unsafe { index::Label::from_index(move_index + 1) };
+            let new_label = unsafe { index::Label::from_index(move_index) };
+            // SAFE:
+            // - by doing the iteration is in this order, we ensure that labels aren't
+            // duplicated
+            // - all blocks that had a reference to this block appear in `malformed_branches`,
+            // so they are removed as well.
+            compiled_blocks
+                .iter_mut()
+                .for_each(|block| unsafe { block.move_label(old_label, new_label) });
+        }
+
+        // now we can safely remove the block
+        compiled_blocks.remove(remove_index);
+    }
+
+    Some(IR::from_blocks(compiled_blocks))
+}
+
+/// Returns an array of the return amounts for each block, as well as the blocks that have
+/// different return counts per branch.
 // NOTE: zero counts might just be that they're a loop
-fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
+fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<usize>, HashSet<usize>) {
     use crate::hlir::End;
     use std::collections::VecDeque;
     let mut slice = vec![0; blocks.len()];
 
     let mut solved = HashSet::new();
+    let mut malformed_branches = HashSet::new();
 
     struct Task {
         index: usize,
@@ -694,7 +811,7 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
     // ensure we go through everyone before we repeat.
     let mut queue = VecDeque::from_iter((0..blocks.len()).map(Task::new));
 
-    while let Some(next) = queue.pop_front() {
+    while let Some(mut next) = queue.pop_front() {
         match &blocks[next.index].end {
             End::TailValue(value) => match value {
                 crate::hlir::Value::Copied(pures) => {
@@ -709,6 +826,10 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
                 }
                 crate::hlir::Value::Call { label, params: _ } => {
                     let target_index = unsafe { label.to_index() };
+                    if malformed_branches.contains(&target_index) {
+                        malformed_branches.insert(next.index);
+                        continue;
+                    }
                     // if our dependency was solved, then we can resolve this one to the same
                     if solved.contains(&target_index) {
                         slice[next.index] = slice[target_index];
@@ -724,8 +845,18 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
             } => {
                 let true_index = unsafe { label_if_true.to_index() };
                 let false_index = unsafe { label_if_false.to_index() };
+                if malformed_branches.contains(&true_index)
+                    || malformed_branches.contains(&false_index)
+                {
+                    malformed_branches.insert(next.index);
+                    continue;
+                }
                 if solved.contains(&true_index) && solved.contains(&false_index) {
-                    debug_assert_eq!(slice[true_index], slice[false_index]);
+                    // block calls are malformed
+                    if slice[true_index] != slice[false_index] {
+                        malformed_branches.insert(next.index);
+                        continue;
+                    }
                     slice[next.index] = slice[true_index];
                     solved.insert(next.index);
                     continue;
@@ -733,13 +864,14 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> FixedArray<usize> {
             }
         }
         if next.tries < 10 {
+            next.tries += 1;
             // note: 10 tries means 10! call chain depth, which is very very unlikely.
             // I'll just won't continue this one and leave it as zero.
             queue.push_back(next);
         }
     }
 
-    slice.into_boxed_slice()
+    (slice.into_boxed_slice(), malformed_branches)
 }
 
 // NOTE: specs aren't used by optimizers, they're used by allocators.

@@ -245,10 +245,8 @@ fn expr_as_br_cond<'src>(
         {
             let mut args = args.into_iter();
             let condition = Pure::from_ast(args.next()?, binding_map, label_map)?;
-            let label_if_true =
-                expect_label_from_ast(args.next()?, label_map)?;
-            let label_if_false =
-                expect_label_from_ast(args.next()?, label_map)?;
+            let label_if_true = expect_label_from_ast(args.next()?, label_map)?;
+            let label_if_false = expect_label_from_ast(args.next()?, label_map)?;
             Ok((condition, label_if_true, label_if_false))
         } else {
             Err(expr)
@@ -474,5 +472,71 @@ impl<'src, Arch> IR<'src, Arch> {
             blocks,
             specs,
         }
+    }
+}
+
+// limit implementation for Arbitrary<Vec<Block>>,
+// so its output can be fed to OPTIR conversion
+// reasons:
+// - labels must have been created according to block amount,
+//   so the label index must match for the block
+#[cfg(feature = "arbitrary")]
+fn check_arbitrary_label(label: index::Label, block_len: usize) -> bool {
+    (unsafe { label.to_index() }) < block_len
+}
+
+#[cfg(feature = "arbitrary")]
+fn check_pure_label(pure: &Pure, block_len: usize) -> bool {
+    if let Pure::Label(label) = pure {
+        check_arbitrary_label(*label, block_len)
+    } else {
+        true
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+fn check_value_labels(value: &Value, block_len: usize) -> bool {
+    match value {
+        Value::Copied(pures) => pures.iter().all(|pure| check_pure_label(pure, block_len)),
+        Value::Add { lhs, rest } => {
+            check_pure_label(lhs, block_len)
+                && rest.iter().all(|pure| check_pure_label(pure, block_len))
+        }
+        Value::Call { label, params } => {
+            check_arbitrary_label(*label, block_len)
+                && params.iter().all(|pure| check_pure_label(pure, block_len))
+        }
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+fn check_block_labels(block: &Block, block_len: usize) -> bool {
+    (match &block.end {
+        End::TailValue(value) => check_value_labels(value, block_len),
+        End::ConditionalBranch {
+            condition,
+            label_if_true,
+            label_if_false,
+        } => {
+            check_pure_label(condition, block_len)
+                && check_arbitrary_label(*label_if_true, block_len)
+                && check_arbitrary_label(*label_if_false, block_len)
+        }
+    }) && block
+        .assigns
+        .iter()
+        .all(|assign| check_value_labels(&assign.value, block_len))
+}
+
+#[cfg(feature = "arbitrary")]
+pub fn check_arbitary_blocks(blocks: Vec<Block>) -> Result<Vec<Block>, arbitrary::Error> {
+    let block_len = blocks.len();
+    if !blocks
+        .iter()
+        .all(|block| check_block_labels(block, block_len))
+    {
+        Err(arbitrary::Error::IncorrectFormat)
+    } else {
+        Ok(blocks)
     }
 }
