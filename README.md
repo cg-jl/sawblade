@@ -97,9 +97,11 @@ Work will be done to narrow down on labels once they're being implemented.
 
 Right now Sawblade is a baby project. It will parse a given amount of blocks, and convert them all the way to its OPTIR representation.
 Sawblade parser skips anything that it can't recognise first try, jumping out in the shortest time possible. This is what I mean by *jump out untouched*.
-Current OPTIR & HLIR use panics when input is malformed beyond syntax, it will be changed to return an Option. Result would've been good if we weren't going
-to ignore the errors anyway.
-I'm working in fuzzing Sawblade's input processing so I can make sure it doesn't trip up.
+OPTIR & HLIR conversions also use `Option`s to skip malformed code. They aren't as fast as the parser but they do pretty good.
+After working with the fuzzer to solve these issues, this is what the current bench presents:
+![cold start bench](./screenshots/criterion-cold.png)
+
+These were done with an i7 8550U processor. It is the processor of my workbench, so there might be noise from other processes like terminal/nvim/rust analyzer.
 
 
 ## Working example(s)
