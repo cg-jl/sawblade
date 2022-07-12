@@ -2,6 +2,7 @@
 // doesn't give a fuck about spans.
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Block<'a> {
     pub name: LinkageLabel<'a>,
     pub spec: Option<Spec<'a>>,
@@ -10,18 +11,21 @@ pub struct Block<'a> {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Spec<'a> {
     pub arguments: Option<Vec<&'a str>>,
     pub returns: Option<Vec<&'a str>>,
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum LinkageLabel<'a> {
     Export(&'a str),
     Internal(&'a str),
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Statement<'a> {
     Assign {
         bindings: Vec<Lvalue<'a>>,
@@ -31,6 +35,7 @@ pub enum Statement<'a> {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Expr<'a> {
     Insn {
         name: &'a str,
@@ -40,6 +45,7 @@ pub enum Expr<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Lvalue<'a> {
     Ignore,
     Named(&'a str),
@@ -56,6 +62,7 @@ impl<'a> Lvalue<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Rvalue<'a> {
     Label(&'a str),
     Constant(u64),

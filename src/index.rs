@@ -10,6 +10,7 @@ use crate::arch;
 // defining architectures)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Register(usize);
 
 impl Register {
@@ -24,9 +25,11 @@ impl Register {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Label(usize);
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Binding(usize);
 
 impl std::fmt::Debug for Binding {

@@ -13,6 +13,7 @@ libfuzzer-sys = "0.4"
 
 [dependencies.sawblade]
 path = ".."
+features = ["arbitrary"]
 
 # Prevent this from interfering with workspaces
 [workspace]
@@ -22,5 +23,11 @@ members = ["."]
 [[bin]]
 name = "sawblade"
 path = "fuzz_targets/sawblade.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ast_to_hlir"
+path = "fuzz_targets/ast_to_hlir.rs"
 test = false
 doc = false

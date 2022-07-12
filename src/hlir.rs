@@ -16,6 +16,7 @@ use crate::ast::{Expr, LinkageLabel, Lvalue, Rvalue, Statement};
 // TODO: Convert tail calls with single parent-child relationship to jumps
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Block {
     // arguments
     pub gets: Vec<index::Binding>,
@@ -55,18 +56,21 @@ impl<Arch> Default for Spec<Arch> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct AssignedBinding {
     pub assign_index: usize,
     pub binding: index::Binding,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Assignment {
     pub used_bindings: Vec<AssignedBinding>,
     pub value: Value,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Value {
     Copied(Vec<Pure>),
     Add {
@@ -81,6 +85,7 @@ pub enum Value {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Pure {
     Binding(index::Binding),
     Label(index::Label),
@@ -92,18 +97,21 @@ impl Pure {
         rvalue: super::ast::Rvalue<'src>,
         bindings: &BindingMap<'src>,
         labels: &mut LabelMap<'src>,
-    ) -> Self {
+    ) -> Option<Self> {
         match rvalue {
-            crate::ast::Rvalue::Label(label) => Self::Label(labels.get_or_add_label_index(label)),
-            crate::ast::Rvalue::Constant(c) => Self::Constant(c),
+            crate::ast::Rvalue::Label(label) => {
+                Some(Self::Label(labels.get_or_add_label_index(label)))
+            }
+            crate::ast::Rvalue::Constant(c) => Some(Self::Constant(c)),
             crate::ast::Rvalue::Binding(binding) => {
-                Self::Binding(bindings.expect_binding_index(binding))
+                bindings.get_binding_index(binding).map(Self::Binding)
             }
         }
     }
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum End {
     TailValue(Value),
     ConditionalBranch {
@@ -215,11 +223,11 @@ impl<'a> Default for LabelMap<'a> {
 fn expect_label_from_ast<'src>(
     rvalue: Rvalue<'src>,
     label_map: &mut LabelMap<'src>,
-) -> index::Label {
+) -> Option<index::Label> {
     if let Rvalue::Label(name) = rvalue {
-        label_map.get_or_add_label_index(name)
+        Some(label_map.get_or_add_label_index(name))
     } else {
-        panic!("expected {:?} to be a label", rvalue)
+        None
     }
 }
 
@@ -227,30 +235,32 @@ fn expr_as_br_cond<'src>(
     expr: Expr<'src>,
     binding_map: &BindingMap<'src>,
     label_map: &mut LabelMap<'src>,
-) -> Result<(Pure, index::Label, index::Label), Expr<'src>> {
+) -> Option<Result<(Pure, index::Label, index::Label), Expr<'src>>> {
     // br-cond <cond> @true-label @false-label
-    if let Expr::Insn {
-        name: "br-cond",
-        args,
-    } = expr
-    {
-        let mut args = args.into_iter();
-        let condition = Pure::from_ast(args.next().unwrap(), binding_map, label_map);
-        let label_if_true =
-            expect_label_from_ast(args.next().expect("br-cond needs @true-label"), label_map);
-        let label_if_false =
-            expect_label_from_ast(args.next().expect("br-cond needs @false-label"), label_map);
-        Ok((condition, label_if_true, label_if_false))
-    } else {
-        Err(expr)
-    }
+    Some(
+        if let Expr::Insn {
+            name: "br-cond",
+            args,
+        } = expr
+        {
+            let mut args = args.into_iter();
+            let condition = Pure::from_ast(args.next()?, binding_map, label_map)?;
+            let label_if_true =
+                expect_label_from_ast(args.next()?, label_map)?;
+            let label_if_false =
+                expect_label_from_ast(args.next()?, label_map)?;
+            Ok((condition, label_if_true, label_if_false))
+        } else {
+            Err(expr)
+        },
+    )
 }
 
 fn expr_as_value<'src>(
     expr: Expr<'src>,
     binding_map: &BindingMap<'src>,
     label_map: &mut LabelMap<'src>,
-) -> Value {
+) -> Option<Value> {
     match expr {
         Expr::Insn { name, args } => {
             match name {
@@ -259,32 +269,31 @@ fn expr_as_value<'src>(
                     let mut args = args
                         .into_iter()
                         .rev()
-                        .map(|arg| Pure::from_ast(arg, binding_map, label_map));
-                    let lhs = args.next().expect("must have lhs on add");
+                        .filter_map(|arg| Pure::from_ast(arg, binding_map, label_map));
+                    let lhs = args.next()?;
                     let rest = args.collect();
 
-                    Value::Add { lhs, rest }
+                    Some(Value::Add { lhs, rest })
                 }
                 // call @label args...?
                 "call" => {
                     let mut args = args.into_iter();
-                    let label = expect_label_from_ast(args.next().unwrap(), label_map);
+                    let label = expect_label_from_ast(args.next()?, label_map)?;
 
                     let params = args
-                        .map(|arg| Pure::from_ast(arg, binding_map, label_map))
+                        .filter_map(|arg| Pure::from_ast(arg, binding_map, label_map))
                         .collect();
 
-                    Value::Call { label, params }
+                    Some(Value::Call { label, params })
                 }
-                other => panic!("unknown instruction: {:?}", other),
+                _ => None,
             }
         }
-        Expr::Copied(values) => Value::Copied(
-            values
-                .into_iter()
-                .map(|arg| Pure::from_ast(arg, binding_map, label_map))
-                .collect(),
-        ),
+        Expr::Copied(values) => values
+            .into_iter()
+            .map(|arg| Pure::from_ast(arg, binding_map, label_map))
+            .collect::<Option<_>>()
+            .map(Value::Copied),
     }
 }
 
@@ -293,7 +302,7 @@ impl Block {
         mut stmts: Vec<Statement<'src>>,
         arguments: Option<Vec<&'src str>>,
         label_map: &mut LabelMap<'src>,
-    ) -> Self {
+    ) -> Option<Self> {
         // create a binding with:
         // - arguments defined
         // - defined bindngs in assignments
@@ -329,7 +338,7 @@ impl Block {
         // re-declare as immutable
         let binding_map = binding_map;
 
-        let end = match stmts.pop().expect("block should be non-empty") {
+        let end = match stmts.pop()? {
             crate::ast::Statement::Assign { bindings, value } => {
                 // we're going to implicitly create a `Copied` tail value
                 let assigned_bindings = bindings
@@ -351,22 +360,22 @@ impl Block {
             }
             // TODO: check if the return value is a `br` insn
             crate::ast::Statement::Return(expr) => {
-                match expr_as_br_cond(expr, &binding_map, label_map) {
+                match expr_as_br_cond(expr, &binding_map, label_map)? {
                     Ok((condition, label_if_true, label_if_false)) => End::ConditionalBranch {
                         condition,
                         label_if_true,
                         label_if_false,
                     },
-                    Err(other) => End::TailValue(expr_as_value(other, &binding_map, label_map)),
+                    Err(other) => End::TailValue(expr_as_value(other, &binding_map, label_map)?),
                 }
             }
         };
 
         let assigns = stmts
             .into_iter()
-            .map(|stmt| match stmt {
+            .filter_map(|stmt| match stmt {
                 crate::ast::Statement::Assign { bindings, value } => {
-                    let value = expr_as_value(value, &binding_map, label_map);
+                    let value = expr_as_value(value, &binding_map, label_map)?;
                     let (used_bindings, value) = if let Value::Copied(copied) = value {
                         // Ignore `Pure` values that were ignored
                         let (used_bindings, values): (Vec<_>, Vec<_>) = bindings
@@ -409,20 +418,20 @@ impl Block {
                         )
                     };
 
-                    Assignment {
+                    Some(Assignment {
                         used_bindings,
                         value,
-                    }
+                    })
                 }
                 // We'll have an ignored assignment
-                crate::ast::Statement::Return(value) => Assignment {
+                crate::ast::Statement::Return(value) => Some(Assignment {
                     used_bindings: Vec::new(),
-                    value: expr_as_value(value, &binding_map, label_map),
-                },
+                    value: expr_as_value(value, &binding_map, label_map)?,
+                }),
             })
             .collect();
 
-        Block { gets, assigns, end }
+        Some(Block { gets, assigns, end })
     }
 }
 
@@ -452,11 +461,11 @@ impl<'src, Arch> IR<'src, Arch> {
         let mut label_map = LabelMap::default();
         let (blocks, specs) = ast
             .into_iter()
-            .map(|block| {
+            .filter_map(|block| {
                 label_map.add_label(block.name);
                 let spec = block.spec.map(Spec::<Arch>::from_ast).unwrap_or_default();
-                let block = Block::from_ast(block.stmts, block.arguments, &mut label_map);
-                (block, spec)
+                let block = Block::from_ast(block.stmts, block.arguments, &mut label_map)?;
+                Some((block, spec))
             })
             .unzip();
 
