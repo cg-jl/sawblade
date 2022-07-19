@@ -96,12 +96,10 @@ impl Pure {
     fn from_ast<'src>(
         rvalue: super::ast::Rvalue<'src>,
         bindings: &BindingMap<'src>,
-        labels: &mut LabelMap<'src>,
+        labels: &LabelMap<'src>,
     ) -> Option<Self> {
         match rvalue {
-            crate::ast::Rvalue::Label(label) => {
-                Some(Self::Label(labels.get_or_add_label_index(label)))
-            }
+            crate::ast::Rvalue::Label(label) => labels.get_label_index(label).map(Self::Label),
             crate::ast::Rvalue::Constant(c) => Some(Self::Constant(c)),
             crate::ast::Rvalue::Binding(binding) => {
                 bindings.get_binding_index(binding).map(Self::Binding)
@@ -185,47 +183,25 @@ pub enum Linkage {
 #[derive(Debug)]
 pub struct LabelMap<'a> {
     labels: HashMap<&'a str, usize>,
-    exports: HashSet<usize>,
+    /// The first N labels are exported
+    export_count: usize,
 }
 
 impl<'a> LabelMap<'a> {
-    fn new() -> Self {
-        Self {
-            labels: HashMap::new(),
-            exports: HashSet::new(),
-        }
-    }
-
-    fn add_label(&mut self, label: LinkageLabel<'a>) {
-        let (name, is_export) = match label {
-            LinkageLabel::Export(name) => (name, true),
-            LinkageLabel::Internal(name) => (name, false),
-        };
-        let index = unsafe { self.get_or_add_label_index(name).to_index() };
-        if is_export {
-            self.exports.insert(index);
-        }
-    }
-
-    fn get_or_add_label_index(&mut self, label_name: &'a str) -> index::Label {
-        let default_index = self.labels.len();
-        let index = *self.labels.entry(label_name).or_insert(default_index);
-        unsafe { index::Label::from_index(index) }
-    }
-}
-
-impl<'a> Default for LabelMap<'a> {
-    fn default() -> Self {
-        Self::new()
+    fn get_label_index(&self, name: &'a str) -> Option<index::Label> {
+        self.labels
+            .get(name)
+            .copied()
+            .map(|index| unsafe { index::Label::from_index(index) })
     }
 }
 
 fn expect_label_from_ast<'src>(
     rvalue: Rvalue<'src>,
-    label_map: &mut LabelMap<'src>,
+    label_map: &LabelMap<'src>,
 ) -> Option<index::Label> {
     if let Rvalue::Label(name) = rvalue {
-        Some(label_map.get_or_add_label_index(name))
+        label_map.get_label_index(name)
     } else {
         None
     }
@@ -234,7 +210,7 @@ fn expect_label_from_ast<'src>(
 fn expr_as_br_cond<'src>(
     expr: Expr<'src>,
     binding_map: &BindingMap<'src>,
-    label_map: &mut LabelMap<'src>,
+    label_map: &LabelMap<'src>,
 ) -> Option<Result<(Pure, index::Label, index::Label), Expr<'src>>> {
     // br-cond <cond> @true-label @false-label
     Some(
@@ -257,7 +233,7 @@ fn expr_as_br_cond<'src>(
 fn expr_as_value<'src>(
     expr: Expr<'src>,
     binding_map: &BindingMap<'src>,
-    label_map: &mut LabelMap<'src>,
+    label_map: &LabelMap<'src>,
 ) -> Option<Value> {
     match expr {
         Expr::Insn { name, args } => {
@@ -299,7 +275,7 @@ impl Block {
     fn from_ast<'src>(
         mut stmts: Vec<Statement<'src>>,
         arguments: Option<Vec<&'src str>>,
-        label_map: &mut LabelMap<'src>,
+        label_map: &LabelMap<'src>,
     ) -> Option<Self> {
         // create a binding with:
         // - arguments defined
@@ -456,13 +432,47 @@ impl<'src, Arch> IR<'src, Arch> {
     where
         Arch: Architecture,
     {
-        let mut label_map = LabelMap::default();
+        // 1. Collect the number of exports
+        let export_count = ast
+            .iter()
+            .filter(|block| matches!(block.name, LinkageLabel::Export(_)))
+            .count();
+
+        // 2. Make the labels with the indices, use two:
+        // one for the exports and one for the locals.
+        // the locals have their index offset by the export count, so that
+        // the exports are the first ones.
+        let labels = ast
+            .iter()
+            .scan(
+                (0, export_count),
+                |(ref mut export_index, ref mut local_index), block| {
+                    Some(match block.name {
+                        LinkageLabel::Export(name) => {
+                            let index = *export_index;
+                            *export_index += 1;
+                            (name, index)
+                        }
+                        LinkageLabel::Internal(name) => {
+                            let index = *local_index;
+                            *local_index += 1;
+                            (name, index)
+                        }
+                    })
+                },
+            )
+            .collect();
+
+        let label_map = LabelMap {
+            labels,
+            export_count,
+        };
+
         let (blocks, specs) = ast
             .into_iter()
             .filter_map(|block| {
-                label_map.add_label(block.name);
                 let spec = block.spec.map(Spec::<Arch>::from_ast).unwrap_or_default();
-                let block = Block::from_ast(block.stmts, block.arguments, &mut label_map)?;
+                let block = Block::from_ast(block.stmts, block.arguments, &label_map)?;
                 Some((block, spec))
             })
             .unzip();
