@@ -1,5 +1,4 @@
 use bitflags::bitflags;
-use std::ops::Range;
 
 use crate::index;
 
@@ -14,7 +13,7 @@ pub struct RegisterSet {
     /// Registers that are used without any speacial meaning.
     /// They're called "general purpose" (abbreviated to gp)
     /// registers.
-    pub gp_registers: Range<index::Register>,
+    pub gp_registers: index::RegisterRange,
     /// The stack pointer. Points to the "top" of the memory stack,
     /// that is, the minimum memory address valid for the current routine's
     /// frame (which is the top of the running stack)
@@ -55,7 +54,7 @@ bitflags! {
 }
 
 impl RegisterSet {
-    pub const fn new(gp_registers: Range<index::Register>) -> Self {
+    pub const fn new(gp_registers: index::RegisterRange) -> Self {
         Self {
             gp_registers,
             stack_pointer: None,
@@ -165,9 +164,12 @@ impl Architecture for X86_64Nasm {
     }
     fn register_set() -> RegisterSet {
         use x86_64_nasm::Register;
-        RegisterSet::new(Register::Rax.as_index()..Register::R15.as_index())
-            .with_stack_pointer(Register::Rsp.as_index())
-            .with_frame_pointer(Register::Rbp.as_index())
-            .with_status_flags(FlagSet::all())
+        RegisterSet::new(index::RegisterRange {
+            start: Register::Rax as u8,
+            end: Register::R15 as u8,
+        })
+        .with_stack_pointer(Register::Rsp.as_index())
+        .with_frame_pointer(Register::Rbp.as_index())
+        .with_status_flags(FlagSet::all())
     }
 }

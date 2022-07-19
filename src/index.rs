@@ -10,10 +10,22 @@ use crate::arch;
 // We keep registers as indices into
 // a register table (to be free in terms of
 // defining architectures)
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd)]
 #[repr(transparent)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Register(u8); // no way your machine has more that 256 fixed registers
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RegisterRange {
+    pub start: u8,
+    pub end: u8,
+}
+
+impl RegisterRange {
+    pub const fn len(self) -> u8 {
+        self.end.saturating_sub(self.start)
+    }
+}
 
 impl Register {
     pub fn from<A: arch::Architecture>(name: &str) -> Option<Self> {
