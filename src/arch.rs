@@ -117,7 +117,7 @@ mod x86_64_nasm {
             }
         }
         pub const fn as_index(self) -> index::Register {
-            unsafe { index::Register::from_index(self as usize) }
+            unsafe { index::Register::from_index(self as u8) }
         }
     }
 

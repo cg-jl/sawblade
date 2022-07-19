@@ -58,7 +58,7 @@ impl<Arch> Default for Spec<Arch> {
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct AssignedBinding {
-    pub assign_index: usize,
+    pub assign_index: u8,
     pub binding: index::Binding,
 }
 
@@ -145,7 +145,7 @@ impl<Arch> Spec<Arch> {
     }
 }
 
-struct BindingMap<'a>(HashMap<&'a str, usize>);
+struct BindingMap<'a>(HashMap<&'a str, u32>);
 
 impl<'a> BindingMap<'a> {
     fn expect_binding_index(&self, name: &'a str) -> index::Binding {
@@ -169,8 +169,8 @@ impl<'a> BindingMap<'a> {
     }
 }
 
-impl<'a> FromIterator<(&'a str, usize)> for BindingMap<'a> {
-    fn from_iter<T: IntoIterator<Item = (&'a str, usize)>>(iter: T) -> Self {
+impl<'a> FromIterator<(&'a str, u32)> for BindingMap<'a> {
+    fn from_iter<T: IntoIterator<Item = (&'a str, u32)>>(iter: T) -> Self {
         Self(HashMap::from_iter(iter))
     }
 }
@@ -182,9 +182,9 @@ pub enum Linkage {
 
 #[derive(Debug)]
 pub struct LabelMap<'a> {
-    labels: HashMap<&'a str, usize>,
+    labels: HashMap<&'a str, u16>, // no more than 65536 labels
     /// The first N labels are exported
-    export_count: usize,
+    export_count: u16,
 }
 
 impl<'a> LabelMap<'a> {
@@ -297,7 +297,7 @@ impl Block {
                     .flatten(),
             )
             .enumerate()
-            .map(|(a, b)| (b, a))
+            .map(|(a, b)| (b, a as u32))
             .collect();
 
         let gets = arguments
@@ -367,7 +367,7 @@ impl Block {
                                 .into_iter()
                                 .enumerate()
                                 .map(|(assign_index, binding)| AssignedBinding {
-                                    assign_index,
+                                    assign_index: assign_index as u8,
                                     binding,
                                 })
                                 .collect(),
@@ -383,7 +383,7 @@ impl Block {
                                         .name_if_not_ignored()
                                         .map(|name| binding_map.expect_binding_index(name))
                                         .map(move |binding| AssignedBinding {
-                                            assign_index,
+                                            assign_index: assign_index as u8,
                                             binding,
                                         })
                                 })
@@ -436,7 +436,7 @@ impl<'src, Arch> IR<'src, Arch> {
         let export_count = ast
             .iter()
             .filter(|block| matches!(block.name, LinkageLabel::Export(_)))
-            .count();
+            .count() as u16;
 
         // 2. Make the labels with the indices, use two:
         // one for the exports and one for the locals.

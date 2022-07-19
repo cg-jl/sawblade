@@ -114,7 +114,7 @@ pub mod bucket {
 pub struct CallReturnUsage {
     /// A list of the results that we're interested in,
     /// out of all the results that the call may spit out
-    pub result_usage: FixedArray<usize>,
+    pub result_usage: FixedArray<u8>,
     /// The range of indices for the bindings that use the results.
     /// There are as many result bindings as `used_indices.len()`
     pub result_binding_range: BindingRange,
@@ -282,7 +282,7 @@ struct BlockBuilder {
 }
 
 #[derive(Debug, Clone)]
-pub struct BindingRange(Range<usize>);
+pub struct BindingRange(Range<u32>);
 
 impl BindingRange {
     pub const fn single(binding: index::Binding) -> Self {
@@ -329,8 +329,8 @@ impl BlockBuilder {
     }
 
     #[inline]
-    fn binding_count(&self) -> usize {
-        self.binding_definitions.len()
+    fn binding_count(&self) -> u32 {
+        self.binding_definitions.len() as u32
     }
 
     /// Converts an HLIR definition into an OPTIR definition.
@@ -355,7 +355,7 @@ impl BlockBuilder {
     /// # Safety
     /// The given definition must be a valid index into the ops vec
     unsafe fn new_binding(&mut self, definition: bucket::Definition) -> index::Binding {
-        let index = self.binding_definitions.len();
+        let index = self.binding_definitions.len() as u32;
         self.binding_definitions.push(definition);
         self.binding_usages.push(Vec::new());
         unsafe { index::Binding::from_index(index) }
@@ -376,7 +376,7 @@ impl BlockBuilder {
     }
 
     fn get_usage_bucket(&mut self, binding: index::Binding) -> &mut Vec<bucket::Usage> {
-        &mut self.binding_usages[unsafe { binding.to_index() }]
+        &mut self.binding_usages[unsafe { binding.to_index() } as usize]
     }
 
     fn compile_add(
@@ -417,7 +417,7 @@ impl BlockBuilder {
         label: index::Label,
         params: Vec<crate::hlir::Pure>,
         assigned_usage: AssignedUsage,
-        target_return_count: usize,
+        target_return_count: u8,
     ) -> Option<BindingRange> {
         // SAFE: we're pushing the operation later, when we finish assigning
         // all the usages
@@ -509,7 +509,7 @@ impl BlockBuilder {
 impl Block {
     fn from_hlir_block(
         hlir_block: super::hlir::Block,
-        block_return_counts: &[usize],
+        block_return_counts: &[u8],
     ) -> Option<Self> {
         // 1. Create the definitions
         // NOTE: I'm only using `gets` for its length... Maybe storing those arguments knowing
@@ -519,7 +519,7 @@ impl Block {
         // we're inserting them in **the same order**.
 
         let mut builder = BlockBuilder {
-            hlir_results: (0..hlir_block.gets.len())
+            hlir_results: (0..hlir_block.gets.len() as u32)
                 .map(|x| {
                     // SAFE: argument bindings are marked first in `binding_definitions`
                     let binding_for_both = unsafe { index::Binding::from_index(x) };
@@ -570,7 +570,7 @@ impl Block {
                         label,
                         params,
                         AssignedUsage::Specific(assignment.used_bindings),
-                        block_return_counts[unsafe { label.to_index() }],
+                        block_return_counts[unsafe { label.to_index() } as usize],
                     );
                 }
             }
@@ -587,7 +587,7 @@ impl Block {
                         label,
                         params,
                         AssignedUsage::All,
-                        block_return_counts[unsafe { label.to_index() }],
+                        block_return_counts[unsafe { label.to_index() } as usize],
                     )?
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
@@ -620,7 +620,7 @@ impl IR {
             .iter()
             .enumerate()
             .map(|(index, block)| {
-                let label = unsafe { index::Label::from_index(index) };
+                let label = unsafe { index::Label::from_index(index as u16) };
                 let edge = match block.end {
                     CFTransfer::Return { .. } => ForwardEdge::Dynamic,
                     CFTransfer::DirectBranch { target, .. } => {
@@ -765,7 +765,7 @@ pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> Option<IR> {
 
     for remove_index in malformed_branches.into_iter_sorted() {
         // offset labels back one by one
-        for move_index in remove_index..compiled_blocks.len().saturating_sub(1) {
+        for move_index in remove_index..(compiled_blocks.len() as u16).saturating_sub(1) {
             // SAFE: we're using block indices, so these are true labels.
             let old_label = unsafe { index::Label::from_index(move_index + 1) };
             let new_label = unsafe { index::Label::from_index(move_index) };
@@ -780,7 +780,7 @@ pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> Option<IR> {
         }
 
         // now we can safely remove the block
-        compiled_blocks.remove(remove_index);
+        compiled_blocks.remove(remove_index as usize);
     }
 
     Some(IR::from_blocks(compiled_blocks))
@@ -789,7 +789,7 @@ pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> Option<IR> {
 /// Returns an array of the return amounts for each block, as well as the blocks that have
 /// different return counts per branch.
 // NOTE: zero counts might just be that they're a loop
-fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<usize>, HashSet<usize>) {
+fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<u8>, HashSet<u16>) {
     use crate::hlir::End;
     use std::collections::VecDeque;
     let mut slice = vec![0; blocks.len()];
@@ -798,29 +798,29 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<usize>, H
     let mut malformed_branches = HashSet::new();
 
     struct Task {
-        index: usize,
-        tries: usize,
+        index: u16,
+        tries: u16,
     }
 
     impl Task {
-        const fn new(index: usize) -> Self {
+        const fn new(index: u16) -> Self {
             Self { index, tries: 0 }
         }
     }
 
     // ensure we go through everyone before we repeat.
-    let mut queue = VecDeque::from_iter((0..blocks.len()).map(Task::new));
+    let mut queue = VecDeque::from_iter((0..blocks.len() as u16).map(Task::new));
 
     while let Some(mut next) = queue.pop_front() {
-        match &blocks[next.index].end {
+        match &blocks[next.index as usize].end {
             End::TailValue(value) => match value {
                 crate::hlir::Value::Copied(pures) => {
-                    slice[next.index] = pures.len();
+                    slice[next.index as usize] = pures.len() as u8;
                     solved.insert(next.index);
                     continue;
                 }
                 crate::hlir::Value::Add { lhs: _, rest: _ } => {
-                    slice[next.index] = 1;
+                    slice[next.index as usize] = 1;
                     solved.insert(next.index);
                     continue;
                 }
@@ -832,7 +832,7 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<usize>, H
                     }
                     // if our dependency was solved, then we can resolve this one to the same
                     if solved.contains(&target_index) {
-                        slice[next.index] = slice[target_index];
+                        slice[next.index as usize] = slice[target_index as usize];
                         solved.insert(next.index);
                         continue;
                     }
@@ -853,11 +853,11 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<usize>, H
                 }
                 if solved.contains(&true_index) && solved.contains(&false_index) {
                     // block calls are malformed
-                    if slice[true_index] != slice[false_index] {
+                    if slice[true_index as usize] != slice[false_index as usize] {
                         malformed_branches.insert(next.index);
                         continue;
                     }
-                    slice[next.index] = slice[true_index];
+                    slice[next.index as usize] = slice[true_index as usize];
                     solved.insert(next.index);
                     continue;
                 }
