@@ -491,12 +491,12 @@ impl<'src, Arch> IR<'src, Arch> {
 // - labels must have been created according to block amount,
 //   so the label index must match for the block
 #[cfg(feature = "arbitrary")]
-fn check_arbitrary_label(label: index::Label, block_len: usize) -> bool {
+fn check_arbitrary_label(label: index::Label, block_len: u16) -> bool {
     (unsafe { label.to_index() }) < block_len
 }
 
 #[cfg(feature = "arbitrary")]
-fn check_pure_label(pure: &Pure, block_len: usize) -> bool {
+fn check_pure_label(pure: &Pure, block_len: u16) -> bool {
     if let Pure::Label(label) = pure {
         check_arbitrary_label(*label, block_len)
     } else {
@@ -505,7 +505,7 @@ fn check_pure_label(pure: &Pure, block_len: usize) -> bool {
 }
 
 #[cfg(feature = "arbitrary")]
-fn check_value_labels(value: &Value, block_len: usize) -> bool {
+fn check_value_labels(value: &Value, block_len: u16) -> bool {
     match value {
         Value::Copied(pures) => pures.iter().all(|pure| check_pure_label(pure, block_len)),
         Value::Add { lhs, rest } => {
@@ -520,7 +520,7 @@ fn check_value_labels(value: &Value, block_len: usize) -> bool {
 }
 
 #[cfg(feature = "arbitrary")]
-fn check_block_labels(block: &Block, block_len: usize) -> bool {
+fn check_block_labels(block: &Block, block_len: u16) -> bool {
     (match &block.end {
         End::TailValue(value) => check_value_labels(value, block_len),
         End::ConditionalBranch {
@@ -540,7 +540,7 @@ fn check_block_labels(block: &Block, block_len: usize) -> bool {
 
 #[cfg(feature = "arbitrary")]
 pub fn check_arbitary_blocks(blocks: Vec<Block>) -> Result<Vec<Block>, arbitrary::Error> {
-    let block_len = blocks.len();
+    let block_len = blocks.len() as u16;
     if !blocks
         .iter()
         .all(|block| check_block_labels(block, block_len))
