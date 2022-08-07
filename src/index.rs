@@ -13,7 +13,7 @@ use crate::arch;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd)]
 #[repr(transparent)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Register(pub u8); // no way your machine has more that 256 fixed registers
+pub struct Register(u8); // no way your machine has more that 256 fixed registers
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RegisterRange {
@@ -25,6 +25,10 @@ impl RegisterRange {
     pub const fn len(self) -> u8 {
         self.end.saturating_sub(self.start)
     }
+
+    pub const unsafe fn get_unchecked(self, offset: u8) -> Register {
+        Register(self.start + offset)
+    }
 }
 
 impl Register {
@@ -34,6 +38,9 @@ impl Register {
     #[inline]
     pub const unsafe fn from_index(index: u8) -> Self {
         Self(index)
+    }
+    pub const unsafe fn as_index(self) -> u8 {
+        self.0
     }
 }
 

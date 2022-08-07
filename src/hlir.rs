@@ -9,7 +9,7 @@
 //! fault.
 use crate::arch::Architecture;
 use crate::index;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::ast::{Expr, LinkageLabel, Lvalue, Rvalue, Statement};
 
@@ -184,6 +184,7 @@ pub enum Linkage {
 pub struct LabelMap<'a> {
     labels: HashMap<&'a str, u16>, // no more than 65536 labels
     /// The first N labels are exported
+    #[allow(dead_code)]
     export_count: u16,
 }
 

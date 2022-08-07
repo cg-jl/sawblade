@@ -1,10 +1,22 @@
 use bitflags::bitflags;
 
 use crate::index;
+use crate::optir::Op;
+use crate::PackedSlice;
+
+// TODO: move x86_64_nasm to its own implementation module
+// TODO: use &mut Vec<u8> instead of &mut Write in assemble() so I can build my own ELF sections
+
+use self::x86_64_nasm::Register;
 
 pub trait Architecture {
     fn index_from_register(name: &str) -> Option<index::Register>;
     fn register_set() -> RegisterSet;
+    fn assemble<W: std::io::Write>(
+        ops: PackedSlice<Op>,
+        registers: PackedSlice<index::Register>,
+        writer: &mut W,
+    ) -> std::io::Result<()>;
 }
 
 // TODO: callee/caller reserved registers
@@ -107,8 +119,8 @@ mod x86_64_nasm {
 
     // some fills to use ranges with it
     impl Register {
-        pub const COUNT: usize = 15;
-        const fn from_number(num: usize) -> Option<Self> {
+        pub const COUNT: u8 = 15;
+        pub const fn from_number(num: u8) -> Option<Self> {
             if num > Self::COUNT {
                 None
             } else {
@@ -118,23 +130,30 @@ mod x86_64_nasm {
         pub const fn as_index(self) -> index::Register {
             unsafe { index::Register::from_index(self as u8) }
         }
+        pub const fn name(&self) -> &str {
+            match self {
+                Register::Rsp => "rsp",
+                Register::Rbp => "rbp",
+                Register::Rax => "rax",
+                Register::Rbx => "rbx",
+                Register::Rcx => "rcx",
+                Register::Rdx => "rdx",
+                Register::Rsi => "rsi",
+                Register::Rdi => "rdi",
+                Register::R9 => "r9",
+                Register::R10 => "r10",
+                Register::R11 => "r11",
+                Register::R12 => "r12",
+                Register::R13 => "r13",
+                Register::R14 => "r14",
+                Register::R15 => "r15",
+            }
+        }
     }
 
-    impl std::iter::Step for Register {
-        fn steps_between(start: &Self, end: &Self) -> Option<usize> {
-            (*end as usize).checked_sub(*start as usize)
-        }
-
-        fn forward_checked(start: Self, count: usize) -> Option<Self> {
-            (start as usize)
-                .checked_add(count)
-                .and_then(Self::from_number)
-        }
-
-        fn backward_checked(start: Self, count: usize) -> Option<Self> {
-            (start as usize)
-                .checked_sub(count)
-                .and_then(Self::from_number)
+    impl std::fmt::Debug for Register {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.name())
         }
     }
 }
@@ -163,7 +182,6 @@ impl Architecture for X86_64Nasm {
         Some(e.as_index())
     }
     fn register_set() -> RegisterSet {
-        use x86_64_nasm::Register;
         RegisterSet::new(index::RegisterRange {
             start: Register::Rax as u8,
             end: Register::R15 as u8,
@@ -171,5 +189,35 @@ impl Architecture for X86_64Nasm {
         .with_stack_pointer(Register::Rsp.as_index())
         .with_frame_pointer(Register::Rbp.as_index())
         .with_status_flags(FlagSet::all())
+    }
+    fn assemble<W: std::io::Write>(
+        _ops: PackedSlice<Op>,
+        registers: PackedSlice<index::Register>,
+        _writer: &mut W,
+    ) -> std::io::Result<()> {
+        // first, let's convert each register index to an actual register of ours
+        let mapped_registers = unsafe {
+            let mut uninit_registers = Box::new_uninit_slice(registers.elements.len());
+            for (target, source) in uninit_registers
+                .iter_mut()
+                .zip(registers.elements.iter().copied())
+            {
+                target.write(
+                    Register::from_number(source.as_index())
+                        .expect("register index out of assembly range"),
+                );
+            }
+            uninit_registers.assume_init()
+        };
+
+        for index in 0..registers.ranges.len() {
+            eprintln!(
+                "registers for block {}:\n{:?}",
+                index,
+                &mapped_registers[registers.ranges[index].clone()]
+            );
+        }
+
+        Ok(())
     }
 }
