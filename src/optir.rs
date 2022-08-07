@@ -507,10 +507,7 @@ impl BlockBuilder {
 }
 
 impl Block {
-    fn from_hlir_block(
-        hlir_block: super::hlir::Block,
-        block_return_counts: &[u8],
-    ) -> Option<Self> {
+    fn from_hlir_block(hlir_block: super::hlir::Block, block_return_counts: &[u8]) -> Option<Self> {
         // 1. Create the definitions
         // NOTE: I'm only using `gets` for its length... Maybe storing those arguments knowing
         // they're the first ones... welp
@@ -700,6 +697,7 @@ impl MoveLabel for PhiSelector {
 }
 
 impl MoveLabel for Constant {
+    #[inline]
     unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
         match self {
             Constant::Numeric(_) => (),
@@ -709,6 +707,7 @@ impl MoveLabel for Constant {
 }
 
 impl MoveLabel for Op {
+    #[inline]
     unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
         match self {
             Op::Constant(c) => unsafe { c.move_label(previous, next) },
@@ -726,6 +725,7 @@ impl MoveLabel for Op {
 }
 
 impl MoveLabel for Block {
+    #[inline]
     unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
         match &mut self.end {
             CFTransfer::Return(_) => (),
@@ -751,14 +751,14 @@ impl MoveLabel for Block {
     }
 }
 
-pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> Option<IR> {
+pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> IR {
     use std::collections::BinaryHeap;
     let (return_counts, malformed_branches) = compute_return_counts(&blocks);
 
     let mut compiled_blocks = blocks
         .into_iter()
-        .map(|block| Block::from_hlir_block(block, &return_counts))
-        .collect::<Option<Vec<_>>>()?;
+        .filter_map(|block| Block::from_hlir_block(block, &return_counts))
+        .collect::<Vec<_>>();
 
     // being a max-heap, we'll have max indices first
     let malformed_branches = BinaryHeap::from_iter(malformed_branches.into_iter());
@@ -783,7 +783,7 @@ pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> Option<IR> {
         compiled_blocks.remove(remove_index as usize);
     }
 
-    Some(IR::from_blocks(compiled_blocks))
+    IR::from_blocks(compiled_blocks)
 }
 
 /// Returns an array of the return amounts for each block, as well as the blocks that have
