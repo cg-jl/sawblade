@@ -145,7 +145,7 @@ impl<Arch> Spec<Arch> {
     }
 }
 
-struct BindingMap<'a>(HashMap<&'a str, u32>);
+struct BindingMap<'a>(HashMap<&'a str, u16>);
 
 impl<'a> BindingMap<'a> {
     fn expect_binding_index(&self, name: &'a str) -> index::Binding {
@@ -169,8 +169,8 @@ impl<'a> BindingMap<'a> {
     }
 }
 
-impl<'a> FromIterator<(&'a str, u32)> for BindingMap<'a> {
-    fn from_iter<T: IntoIterator<Item = (&'a str, u32)>>(iter: T) -> Self {
+impl<'a> FromIterator<(&'a str, u16)> for BindingMap<'a> {
+    fn from_iter<T: IntoIterator<Item = (&'a str, u16)>>(iter: T) -> Self {
         Self(HashMap::from_iter(iter))
     }
 }
@@ -297,7 +297,7 @@ impl Block {
                     .flatten(),
             )
             .enumerate()
-            .map(|(a, b)| (b, a as u32))
+            .map(|(a, b)| (b, a as u16))
             .collect();
 
         let gets = arguments

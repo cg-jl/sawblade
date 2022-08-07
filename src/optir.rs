@@ -76,14 +76,40 @@ pub mod bucket {
         Selective { selection_bucket: u8 },
     }
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Ord, PartialEq, Eq)]
     pub enum UsageIndex {
-        Op(usize),
+        Op(u16),
         BlockEnd,
     }
 
+    impl PartialOrd for UsageIndex {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            match (self, other) {
+                (Self::BlockEnd, Self::BlockEnd) => Some(std::cmp::Ordering::Equal),
+                (Self::BlockEnd, _) => Some(std::cmp::Ordering::Greater),
+                (_, Self::BlockEnd) => Some(std::cmp::Ordering::Less),
+                (Self::Op(a), Self::Op(b)) => a.partial_cmp(&b),
+            }
+        }
+    }
+
+    impl PartialEq<u16> for UsageIndex {
+        fn eq(&self, other: &u16) -> bool {
+            match self {
+                Self::Op(i) => i == other,
+                Self::BlockEnd => false,
+            }
+        }
+    }
+
+    impl PartialOrd<u16> for UsageIndex {
+        fn partial_cmp(&self, other: &u16) -> Option<std::cmp::Ordering> {
+            self.as_index().and_then(|i| i.partial_cmp(other))
+        }
+    }
+
     impl UsageIndex {
-        pub const fn as_index(self) -> Option<usize> {
+        pub const fn as_index(self) -> Option<u16> {
             match self {
                 UsageIndex::Op(index) => Some(index),
                 UsageIndex::BlockEnd => None,
@@ -101,8 +127,16 @@ pub mod bucket {
     /// Describes how and/or where a binding is defined
     #[derive(Debug, Clone, Copy)]
     pub enum Definition {
-        Argument(usize),
-        Op(usize),
+        Argument(u16),
+        Op(u16),
+    }
+
+    impl Definition {
+        pub const fn index(self) -> u16 {
+            match self {
+                Self::Argument(i) | Self::Op(i) => i,
+            }
+        }
     }
 }
 
@@ -282,7 +316,7 @@ struct BlockBuilder {
 }
 
 #[derive(Debug, Clone)]
-pub struct BindingRange(Range<u32>);
+pub struct BindingRange(Range<u16>);
 
 impl BindingRange {
     pub const fn single(binding: index::Binding) -> Self {
@@ -329,8 +363,8 @@ impl BlockBuilder {
     }
 
     #[inline]
-    fn binding_count(&self) -> u32 {
-        self.binding_definitions.len() as u32
+    fn binding_count(&self) -> u16 {
+        self.binding_definitions.len() as u16
     }
 
     /// Converts an HLIR definition into an OPTIR definition.
@@ -348,14 +382,14 @@ impl BlockBuilder {
     unsafe fn usage_for_next_op(&self, usage_kind: bucket::UsageKind) -> bucket::Usage {
         bucket::Usage {
             usage_kind,
-            index: bucket::UsageIndex::Op(self.ops.len()),
+            index: bucket::UsageIndex::Op(self.ops.len() as u16),
         }
     }
 
     /// # Safety
     /// The given definition must be a valid index into the ops vec
     unsafe fn new_binding(&mut self, definition: bucket::Definition) -> index::Binding {
-        let index = self.binding_definitions.len() as u32;
+        let index = self.binding_definitions.len() as u16;
         self.binding_definitions.push(definition);
         self.binding_usages.push(Vec::new());
         unsafe { index::Binding::from_index(index) }
@@ -369,7 +403,7 @@ impl BlockBuilder {
     /// Create a new binding and define it. Also
     /// adds an empty usage bucket
     fn define(&mut self, op: Op) -> index::Binding {
-        let definition = bucket::Definition::Op(self.ops.len());
+        let definition = bucket::Definition::Op(self.ops.len() as u16);
         self.ops.push(op);
         // SAFE: op index is correct since we've pushed a new op
         unsafe { self.new_binding(definition) }
@@ -436,7 +470,7 @@ impl BlockBuilder {
 
         let result_start_index = self.binding_count();
         let definition =
-            bucket::Definition::Op(unsafe { usage.index.as_index().unwrap_unchecked() });
+            bucket::Definition::Op(unsafe { usage.index.as_index().unwrap_unchecked() } as u16);
 
         // Collect the used indices, while registering the result
         // to their bindings.
@@ -511,7 +545,7 @@ impl Block {
         // 1. Create the definitions
         // NOTE: I'm only using `gets` for its length... Maybe storing those arguments knowing
         // they're the first ones... welp
-        let arg_buckets = (0..hlir_block.gets.len()).map(bucket::Definition::Argument);
+        let arg_buckets = (0..hlir_block.gets.len() as u16).map(bucket::Definition::Argument);
         // SAFE: using the binding indices produced by HLIR is fine,
         // we're inserting them in **the same order**.
 
@@ -519,7 +553,7 @@ impl Block {
             hlir_results: (0..hlir_block.gets.len() as u32)
                 .map(|x| {
                     // SAFE: argument bindings are marked first in `binding_definitions`
-                    let binding_for_both = unsafe { index::Binding::from_index(x) };
+                    let binding_for_both = unsafe { index::Binding::from_index(x as u16) };
                     (binding_for_both, binding_for_both)
                 })
                 .collect(),
