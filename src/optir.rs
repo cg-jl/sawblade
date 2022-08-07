@@ -523,7 +523,49 @@ impl BlockBuilder {
         Some(result_binding_range)
     }
 
-    fn release(self, end: CFTransfer) -> Block {
+    fn release(mut self, end: CFTransfer) -> Block {
+        // register usages for end
+        match &end {
+            CFTransfer::Return(bindings) => {
+                bindings.iter().copied().for_each(|binding| {
+                    self.get_usage_bucket(binding).push(bucket::Usage {
+                        // each returned binding has to
+                        usage_kind: bucket::UsageKind::Exclusive,
+                        index: bucket::UsageIndex::BlockEnd,
+                    })
+                });
+            }
+            // TODO: produce selective block end usages for bindings depending on the branch.
+            // NOTE: should it be done in the allocator?
+            CFTransfer::DirectBranch {
+                target: _,
+                exported_bindings,
+            } => exported_bindings
+                .values()
+                .flat_map(|x| x.iter().copied())
+                .for_each(|binding| {
+                    self.get_usage_bucket(binding).push(bucket::Usage {
+                        // each returned binding has to
+                        usage_kind: bucket::UsageKind::Exclusive,
+                        index: bucket::UsageIndex::BlockEnd,
+                    })
+                }),
+            CFTransfer::ConditionalBranch {
+                exported_bindings,
+                condition_source: _,
+                target_if_true: _,
+                target_if_false: _,
+            } => exported_bindings
+                .values()
+                .flat_map(|x| x.iter().copied())
+                .for_each(|binding| {
+                    self.get_usage_bucket(binding).push(bucket::Usage {
+                        // each returned binding has to
+                        usage_kind: bucket::UsageKind::Exclusive,
+                        index: bucket::UsageIndex::BlockEnd,
+                    })
+                }),
+        }
         Block {
             arg_count: self.arg_count,
             binding_defs: self.binding_definitions.into(),
