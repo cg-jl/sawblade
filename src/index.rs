@@ -29,6 +29,10 @@ impl RegisterRange {
     pub const unsafe fn get_unchecked(self, offset: u8) -> Register {
         Register(self.start + offset)
     }
+
+    pub const fn contains(&self, Register(index): Register) -> bool {
+        self.start <= index && index < self.end
+    }
 }
 
 impl Register {

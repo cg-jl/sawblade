@@ -8,17 +8,20 @@ use std::collections::HashSet;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 
-type BindingMap<T> = std::collections::HashMap<index::Binding, T>;
-
 fn resolve_allocs_from_spec<A>(
     spec: &crate::hlir::Spec<A>,
     block: &optir::Block,
+    allocator: &mut GPAllocator,
     registers: &mut [MaybeUninit<Register>],
 ) {
     for op in block.operations.iter() {
         if let Op::Call { args, .. } = op {
             for (binding, register) in args.iter().copied().zip(spec.arguments.iter().copied()) {
                 registers[unsafe { binding.to_index() } as usize].write(register);
+                // notify the allocator that we've pre-assigned some stuff.
+                unsafe {
+                    allocator.assign_allocation(binding, register);
+                }
             }
         }
     }
@@ -93,6 +96,13 @@ impl GPAllocator {
         }
     }
 
+    unsafe fn assign_allocation(&mut self, binding: index::Binding, register: Register) {
+        if self.gp_registers.contains(register) {
+            self.buckets[(unsafe { register.as_index() } - self.gp_registers.start) as usize]
+                .push(binding);
+        }
+    }
+
     fn allocate(
         &mut self,
         binding: index::Binding,
@@ -115,11 +125,10 @@ impl GPAllocator {
 
 fn resolve_general_purpose_allocations(
     collisions: &[HashSet<index::Binding>],
-    gp_registers: RegisterRange,
+    allocator: &mut GPAllocator,
     target_registers: &mut [MaybeUninit<Register>],
 ) {
     // NOTE: not using scan() because it uses Some() as a scan_while
-    let mut allocator = GPAllocator::new(gp_registers);
 
     for index in (0..collisions.len() as u16) {
         let register = allocator
@@ -157,6 +166,8 @@ pub fn allocate_registers<A: Architecture>(
     //    - grabs intersection of available non-repeating registers from each block
     //    - if intersection is null, then grab the next least-used register for the blocks
     //    - assign that register to that argument/return, registering it in the regspecs of each block
+
+    // pre-allocate the collision map
     let (block_ranges, mut collision_map) = {
         let mut block_indices = Vec::with_capacity(ir.blocks.len());
 
@@ -183,13 +194,20 @@ pub fn allocate_registers<A: Architecture>(
 
     let mut registers = Box::new_uninit_slice(collision_map.len());
 
+    let mut allocator = GPAllocator::new(register_set.gp_registers);
+
     // NOTE: currently just using collision-based allocation
     for (index, (range, block)) in block_ranges.iter().zip(ir.blocks.iter()).enumerate() {
         compute_lifetime_collisions(block, &mut collision_map[range.clone()]);
-        resolve_allocs_from_spec(&spec[index], block, &mut registers[range.clone()]);
+        resolve_allocs_from_spec(
+            &spec[index],
+            block,
+            &mut allocator,
+            &mut registers[range.clone()],
+        );
         resolve_general_purpose_allocations(
             &collision_map[range.clone()],
-            register_set.gp_registers,
+            &mut allocator,
             &mut registers[range.clone()],
         );
     }
