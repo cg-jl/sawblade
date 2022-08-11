@@ -182,10 +182,10 @@ pub enum Linkage {
 
 #[derive(Debug)]
 pub struct LabelMap<'a> {
-    labels: HashMap<&'a str, u16>, // no more than 65536 labels
+    pub labels: HashMap<&'a str, u16>, // no more than 65536 labels
     /// The first N labels are exported
     #[allow(dead_code)]
-    export_count: u16,
+    pub export_count: u16,
 }
 
 impl<'a> LabelMap<'a> {
@@ -429,7 +429,7 @@ impl<Arch> std::fmt::Debug for IR<'_, Arch> {
 }
 
 impl<'src, Arch> IR<'src, Arch> {
-    pub fn from_ast(ast: Vec<crate::ast::Block<'src>>) -> Self
+    pub fn from_ast(mut ast: Vec<crate::ast::Block<'src>>) -> Self
     where
         Arch: Architecture,
     {
@@ -463,11 +463,12 @@ impl<'src, Arch> IR<'src, Arch> {
                 },
             )
             .collect();
-
         let label_map = LabelMap {
             labels,
             export_count,
         };
+        // reorder blocks according to their label
+        ast.sort_unstable_by_key(|block| label_map.labels[&block.name.name()]);
 
         let (blocks, specs) = ast
             .into_iter()

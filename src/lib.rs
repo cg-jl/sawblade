@@ -14,6 +14,7 @@ pub mod hlir;
 pub mod index;
 pub mod optir;
 
+#[derive(Debug)]
 pub struct PackedSlice<'elt, 'r, T> {
     pub elements: &'elt [T],
     pub ranges: &'r [Range<usize>],

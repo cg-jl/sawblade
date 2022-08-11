@@ -470,7 +470,7 @@ impl BlockBuilder {
 
         let result_start_index = self.binding_count();
         let definition =
-            bucket::Definition::Op(unsafe { usage.index.as_index().unwrap_unchecked() } as u16);
+            bucket::Definition::Op(self.ops.len() as u16);
 
         // Collect the used indices, while registering the result
         // to their bindings.

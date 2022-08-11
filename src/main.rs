@@ -63,7 +63,7 @@ fn main() {
 
     let mut output = std::io::stdout();
 
-    let (ops, ops_ranges) = {
+    let (ops, ops_ranges, definitions, ends) = {
         let mut op_ranges = Box::new_uninit_slice(optir.blocks.len());
         let total_op_count = optir
             .blocks
@@ -77,13 +77,37 @@ fn main() {
             });
 
         let op_ranges = unsafe { op_ranges.assume_init() };
+        let mut definitions =
+            Box::new_uninit_slice(optir.blocks.iter().map(|b| b.binding_defs.len()).sum());
+
+        {
+            let mut current_block_offset = 0usize;
+            let mut current_op_offset = 0u32;
+            for block in &optir.blocks {
+                block
+                    .binding_defs
+                    .iter()
+                    .map(|def| def.index() as u32 + current_op_offset)
+                    .zip(definitions.iter_mut().skip(current_block_offset as usize))
+                    .for_each(|(src, target)| {
+                        target.write(src);
+                    });
+                current_block_offset += block.binding_defs.len();
+                current_op_offset += block.operations.len() as u32;
+            }
+        }
 
         let mut all_ops = Box::new_uninit_slice(total_op_count);
+        let mut all_ends = Box::new_uninit_slice(optir.blocks.len());
 
         for (ops, range) in optir
             .blocks
             .into_iter()
-            .map(|block| block.operations)
+            .enumerate()
+            .map(|(index, block)| {
+                all_ends[index].write(block.end);
+                block.operations
+            })
             .zip(op_ranges.iter().cloned())
         {
             let slice = &mut all_ops[range];
@@ -92,7 +116,24 @@ fn main() {
             }
         }
 
-        (unsafe { all_ops.assume_init() }, op_ranges)
+        (
+            unsafe { all_ops.assume_init() },
+            op_ranges,
+            unsafe { definitions.assume_init() },
+            unsafe { all_ends.assume_init() },
+        )
+    };
+
+    let label_map = {
+        let mut map = Box::new_uninit_slice(hlir.label_map.export_count as usize);
+        hlir.label_map
+            .labels
+            .into_iter()
+            .filter(|(_label, index)| *index < hlir.label_map.export_count)
+            .for_each(|(label, index)| {
+                map[index as usize].write(label);
+            });
+        unsafe { map.assume_init() }
     };
 
     sawblade::arch::X86_64Nasm::assemble(
@@ -104,6 +145,9 @@ fn main() {
             elements: &registers,
             ranges: &ranges,
         },
+        &definitions,
+        &ends,
+        &label_map,
         &mut output,
     )
     .unwrap();

@@ -24,6 +24,14 @@ pub enum LinkageLabel<'a> {
     Internal(&'a str),
 }
 
+impl<'a> LinkageLabel<'a> {
+    pub const fn name(self) -> &'a str {
+        match self {
+            LinkageLabel::Export(name) | LinkageLabel::Internal(name) => name,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Statement<'a> {
