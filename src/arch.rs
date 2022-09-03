@@ -270,14 +270,6 @@ impl Architecture for X86_64Nasm {
             unsafe { real_registers.assume_init() }
         };
 
-        // DEBUG
-        for (index, range) in registers.ranges.iter().enumerate() {
-            eprintln!("[dbg] block @{}: ", index);
-            for (binding, register) in real_registers[range.clone()].iter().enumerate() {
-                eprintln!("\t%{binding} -> {register:?}");
-            }
-        }
-
         // TODO: assembly-ready IR:
         //  - no phi statements
         //  - everything in (op dest sources...) format

@@ -7,7 +7,6 @@
 
 use sawblade::PackedSlice;
 
-
 use sawblade::arch::Architecture;
 use sawblade::optir::CFTransfer;
 fn main() {
@@ -18,8 +17,6 @@ fn main() {
     let optir = sawblade::optir::dissect_from_hlir(hlir.blocks);
     let (registers, register_ranges) =
         sawblade::allocators::allocate_registers::<sawblade::arch::X86_64Nasm>(&optir, &hlir.specs);
-
-    dbg!(&registers, &register_ranges);
 
     let mut output = std::io::stdout();
 
