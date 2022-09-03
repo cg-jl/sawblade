@@ -7,10 +7,6 @@ have analysis information easily accessible, avoiding computing stuff twice...
 Sawblade is designed to cut through code like it's butter, or jump out untouched, which *may* cause injuries. 
 Kinda like a sawblade when cutting through tough materials.
 
-## Notes
-
-- The backend produces suitable output for `nasm`, not for `as`. Future versions will consider `as`/`gcc`.
-
 ## Design Idea & Spec
 
 The main idea is to be able to specify exactly how pieces of code interface with each other, and let it decide
@@ -26,13 +22,13 @@ ABIs can be either put inline in the block definition or written separately:
 
 
 ```sawblade
-abi C { return : int [ rax ... ]; ...  }
+abi C { return [ rax ... ] ...  }
 
 block "main" :: C { ... }
 ```
 
 ```sawblade
-block "main" :: { return : int [ rax ]; } { ... }
+block "main" :: { return [ rax ]; } { ... }
 ```
 
 
