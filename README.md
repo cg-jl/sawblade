@@ -95,15 +95,14 @@ Work will be done to narrow down on labels once they're being implemented.
 
 ## State of the art
 
-Right now Sawblade is a baby project. It will parse a given amount of blocks, and convert them all the way to its OPTIR representation.
-Sawblade parser skips anything that it can't recognise first try, jumping out in the shortest time possible. This is what I mean by *jump out untouched*.
-OPTIR & HLIR conversions also use `Option`s to skip malformed code. They aren't as fast as the parser but they do pretty good.
-After working with the fuzzer to solve these issues, this is what the current bench presents:
-![cold start bench](./screenshots/criterion-cold.png)
-
-These were done with an i7 8550U processor. It is the processor of my workbench, so there might be noise from other processes like terminal/nvim/rust analyzer.
+Now Sawblade is still a baby project, but it can compile its first sample! The
+code generator needs more work to be correct (e.g correct handling of call
+arguments and spills) but at least I have a working sample I can iterate on.
 
 
 ## Working example(s)
 
-- [examples/test.sawblade](./examples/test.sawblade): The initial test, defines a block to be exported which returns some constants on predefined registers.
+- [examples/test.sawblade](./examples/test.sawblade): The initial test, defines
+  two blocks, one is exported, one is not, and in one of them it poses a
+  restriction for the return register. It also introduces a call and operates
+  with the result of the call. The program returns 26.
