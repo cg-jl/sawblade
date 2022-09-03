@@ -304,6 +304,8 @@ pub struct IR {
     pub forwards_branching_map: HashMap<index::Label, ForwardEdge>,
     /// Branching map that goes child->parent direction.
     pub backwards_branching_map: HashMap<index::Label, FixedArray<index::Label>>,
+    pub return_blocks: Box<[Vec<index::Label>]>,
+    pub return_counts: Box<[u8]>,
 }
 
 struct BlockBuilder {
@@ -469,8 +471,7 @@ impl BlockBuilder {
             .map(Vec::into_boxed_slice)?;
 
         let result_start_index = self.binding_count();
-        let definition =
-            bucket::Definition::Op(self.ops.len() as u16);
+        let definition = bucket::Definition::Op(self.ops.len() as u16);
 
         // Collect the used indices, while registering the result
         // to their bindings.
@@ -686,7 +687,26 @@ impl Block {
 }
 
 impl IR {
-    fn from_blocks(blocks: Vec<Block>) -> Self {
+    pub fn return_blocks_in_dependency_order(&self) -> impl Iterator<Item = index::Label> {
+        crate::DependencyOrderIterWithSet::new(
+            self.return_blocks
+                .iter()
+                .enumerate()
+                .map(|(index, returns)| {
+                    (
+                        unsafe { index::Label::from_index(index as u16) },
+                        returns.iter().copied().collect::<HashSet<_>>(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn from_blocks(
+        blocks: Vec<Block>,
+        return_blocks: Box<[Vec<index::Label>]>,
+        return_counts: Box<[u8]>,
+    ) -> Self {
         let mut backwards_branching_map: HashMap<_, HashSet<_>> =
             HashMap::with_capacity(blocks.len());
         let forwards_branching_map: HashMap<_, _> = blocks
@@ -741,6 +761,8 @@ impl IR {
             blocks,
             forwards_branching_map,
             backwards_branching_map,
+            return_blocks,
+            return_counts,
         }
     }
 }
@@ -829,7 +851,8 @@ impl MoveLabel for Block {
 
 pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> IR {
     use std::collections::BinaryHeap;
-    let (return_counts, malformed_branches) = compute_return_counts(&blocks);
+    let mut returning_blocks = vec![HashSet::new(); blocks.len()].into_boxed_slice();
+    let (return_counts, malformed_branches) = compute_return_counts(&blocks, &mut returning_blocks);
 
     let mut compiled_blocks = blocks
         .into_iter()
@@ -859,13 +882,23 @@ pub fn dissect_from_hlir(blocks: Vec<crate::hlir::Block>) -> IR {
         compiled_blocks.remove(remove_index as usize);
     }
 
-    IR::from_blocks(compiled_blocks)
+    IR::from_blocks(
+        compiled_blocks,
+        crate::BoxIntoIter::new(returning_blocks)
+            .map(|set| set.into_iter().collect())
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+        return_counts,
+    )
 }
 
 /// Returns an array of the return amounts for each block, as well as the blocks that have
 /// different return counts per branch.
 // NOTE: zero counts might just be that they're a loop
-fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<u8>, HashSet<u16>) {
+fn compute_return_counts(
+    blocks: &[crate::hlir::Block],
+    returning_blocks: &mut [HashSet<index::Label>],
+) -> (FixedArray<u8>, HashSet<u16>) {
     use crate::hlir::End;
     use std::collections::VecDeque;
     let mut slice = vec![0; blocks.len()];
@@ -889,31 +922,42 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<u8>, Hash
 
     while let Some(mut next) = queue.pop_front() {
         match &blocks[next.index as usize].end {
-            End::TailValue(value) => match value {
-                crate::hlir::Value::Copied(pures) => {
-                    slice[next.index as usize] = pures.len() as u8;
-                    solved.insert(next.index);
-                    continue;
-                }
-                crate::hlir::Value::Add { lhs: _, rest: _ } => {
-                    slice[next.index as usize] = 1;
-                    solved.insert(next.index);
-                    continue;
-                }
-                crate::hlir::Value::Call { label, params: _ } => {
-                    let target_index = unsafe { label.to_index() };
-                    if malformed_branches.contains(&target_index) {
-                        malformed_branches.insert(next.index);
-                        continue;
-                    }
-                    // if our dependency was solved, then we can resolve this one to the same
-                    if solved.contains(&target_index) {
-                        slice[next.index as usize] = slice[target_index as usize];
+            End::TailValue(value) => {
+                // since we're at a TailValue, this block returns from itself.
+                returning_blocks[next.index as usize]
+                    .insert(unsafe { index::Label::from_index(next.index) });
+                match value {
+                    crate::hlir::Value::Copied(pures) => {
+                        slice[next.index as usize] = pures.len() as u8;
                         solved.insert(next.index);
                         continue;
                     }
+                    crate::hlir::Value::Add { lhs: _, rest: _ } => {
+                        slice[next.index as usize] = 1;
+                        solved.insert(next.index);
+                        continue;
+                    }
+                    crate::hlir::Value::Call { label, params: _ } => {
+                        let target_index = unsafe { label.to_index() };
+                        // NOTE: same TODO  from below applies here, but to a single call. This
+                        // implies that the rest of operations after any call whose block yields
+                        // never makes for the deletion of the *rest* of the block. And yes, this
+                        // could be done in HLIR :). Doing this is safe because the situations for
+                        // yielding never are exactly two: entering a block that yields never or
+                        // completing an unconditional jump chain.
+                        if malformed_branches.contains(&target_index) {
+                            malformed_branches.insert(next.index);
+                            continue;
+                        }
+                        // if our dependency was solved, then we can resolve this one to the same
+                        if solved.contains(&target_index) {
+                            slice[next.index as usize] = slice[target_index as usize];
+                            solved.insert(next.index);
+                            continue;
+                        }
+                    }
                 }
-            },
+            }
             End::ConditionalBranch {
                 condition: _,
                 label_if_true,
@@ -929,10 +973,26 @@ fn compute_return_counts(blocks: &[crate::hlir::Block]) -> (FixedArray<u8>, Hash
                 }
                 if solved.contains(&true_index) && solved.contains(&false_index) {
                     // block calls are malformed
+                    // TODO: this is not particularly true, specially in the case that one of the
+                    // blocks never returns. This behavior should be pre-detected and then this
+                    // expression should select the amount of returns from the block that never
+                    // returns. If both blocks return and they return different arguments, then it
+                    // IS a malformed branch since it yields undefined values.
                     if slice[true_index as usize] != slice[false_index as usize] {
                         malformed_branches.insert(next.index);
                         continue;
                     }
+
+                    // sadly due to the possibility of iterator invalidation during the extend()
+                    // method and my absence of knowledge about the inner workings of
+                    // HashSet::extend I have to clone these two.
+                    // TODO: peek into the implementation of HashSet::extend and figure out how to
+                    // avoid these two copies.
+                    let true_set = returning_blocks[true_index as usize].clone();
+                    let false_set = returning_blocks[false_index as usize].clone();
+
+                    returning_blocks[next.index as usize]
+                        .extend(false_set.into_iter().chain(true_set));
                     slice[next.index as usize] = slice[true_index as usize];
                     solved.insert(next.index);
                     continue;

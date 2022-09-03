@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bitflags::bitflags;
 
 use crate::index;
@@ -16,17 +18,15 @@ pub trait Architecture {
     fn index_from_register(name: &str) -> Option<index::Register>;
     fn register_set() -> RegisterSet;
     fn assemble<'label, W: std::io::Write>(
-        ir_ops: PackedSlice<Op>,
+        ir: crate::optir::IR,
         registers: PackedSlice<index::Register>,
-        definitions: &[u32],
-        block_ends: &[crate::optir::CFTransfer],
-        exported_labels: &[&'label str],
+        label_map: &[&'label str],
         output: &mut W,
     ) -> std::io::Result<()>;
 }
 
 // TODO: callee/caller reserved registers
-
+#[derive(Clone, Copy)]
 pub struct RegisterSet {
     /// Registers that are used without any speacial meaning.
     /// They're called "general purpose" (abbreviated to gp)
@@ -103,7 +103,7 @@ pub struct X86_64Nasm;
 
 mod x86_64_nasm {
     use crate::index;
-    #[derive(PartialEq, PartialOrd, Clone, Copy)]
+    #[derive(PartialEq, PartialOrd, Clone, Copy, Hash, Eq)]
     #[repr(u8)]
     pub enum Register {
         Rsp,
@@ -122,6 +122,8 @@ mod x86_64_nasm {
         R14,
         R15,
     }
+
+    crate::impl_self_dependency_eq!(Register);
 
     // some fills to use ranges with it
     impl Register {
@@ -245,26 +247,36 @@ impl Architecture for X86_64Nasm {
         .with_status_flags(FlagSet::all())
     }
     fn assemble<'label, W: std::io::Write>(
-        ir_ops: PackedSlice<Op>,
+        ir: crate::optir::IR,
         registers: PackedSlice<index::Register>,
-        definitions: &[u32],
-        block_ends: &[CFTransfer],
-        exported_labels: &[&'label str],
+        label_map: &[&'label str],
         output: &mut W,
     ) -> std::io::Result<()> {
         let real_registers = {
-            let mut real_registers = Box::new_uninit_slice(definitions.len());
+            let mut real_registers = Box::new_uninit_slice(registers.elements.len());
             real_registers
                 .iter_mut()
                 .zip(registers.elements.iter())
                 .for_each(|(target, src)| {
                     target.write(
-                        Register::from_number(unsafe { src.as_index() })
-                            .expect("virtual register index out of range for x86_64 architecture"),
+                        Register::from_number(unsafe { src.as_index() }).unwrap_or_else(|| {
+                            panic!(
+                                "virtual register index out of range for x86_64 architecture: {}",
+                                unsafe { src.as_index() }
+                            )
+                        }),
                     );
                 });
             unsafe { real_registers.assume_init() }
         };
+
+        // DEBUG
+        for (index, range) in registers.ranges.iter().enumerate() {
+            eprintln!("[dbg] block @{}: ", index);
+            for (binding, register) in real_registers[range.clone()].iter().enumerate() {
+                eprintln!("\t%{binding} -> {register:?}");
+            }
+        }
 
         // TODO: assembly-ready IR:
         //  - no phi statements
@@ -272,102 +284,134 @@ impl Architecture for X86_64Nasm {
         //  - ends in ret | branch on <this exact flag> | just jump
         //  - inserted "get <this flag> into CPU state from <this register>" pseudo-instructions
         let mut assembly = Vec::new();
-        let mut assembly_label_starts = vec![0];
+        let mut assembly_label_starts = Vec::with_capacity(ir.blocks.len());
 
         let label_names = {
-            let mut names = Box::new_uninit_slice(ir_ops.ranges.len());
+            let mut names = Box::new_uninit_slice(ir.blocks.len());
             names
                 .iter_mut()
-                .skip(exported_labels.len())
+                .skip(label_map.len())
                 .enumerate()
                 .for_each(|(index, name)| {
                     name.write(format!(".BB{}", index));
                 });
-            names
-                .iter_mut()
-                .zip(exported_labels)
-                .for_each(|(name, label)| {
-                    name.write(label.to_string());
-                });
+            names.iter_mut().zip(label_map).for_each(|(name, label)| {
+                name.write(label.to_string());
+            });
             unsafe { names.assume_init() }
         };
-        let mut block_index = 0;
 
-        let mut last_compiled_op_index = None;
-        for (def_index, op_index) in definitions.iter().copied().enumerate() {
-            // NOTE: op indices come in order. There's no jumping between 2 and 4, we have 2 3 and
-            // then 4.
-            // already compiled this op
-            let op_index = op_index as usize;
-            if op_index < last_compiled_op_index.unwrap_or(0) {
-                continue;
-            }
-
-            // let's check if we finished the current block
-            if !ir_ops.ranges[block_index].contains(&op_index) {
-                match &block_ends[block_index] {
-                    CFTransfer::Return(_) => assembly.push(AssemblyOp::Ret),
-                    CFTransfer::DirectBranch { .. } => todo!(),
-                    CFTransfer::ConditionalBranch { .. } => todo!(),
-                }
-                assembly_label_starts.push(assembly.len());
-                block_index += 1;
-            }
-
-            let target_register = real_registers[def_index];
-
-            // now let's compile the op
-            match &ir_ops.elements[op_index] {
-                Op::Constant(c) => {
-                    assembly.push(AssemblyOp::Mov {
+        for (block_index, block) in ir.blocks.iter().enumerate() {
+            assembly_label_starts.push(assembly.len());
+            for (op_index, op) in block.operations.iter().enumerate() {
+                let target_binding = op_index + block.arg_count;
+                let target_register =
+                    real_registers[target_binding + registers.ranges[block_index].start];
+                match op {
+                    Op::Constant(c) => assembly.push(AssemblyOp::Mov {
                         dest: target_register,
                         source: match c {
-                            crate::optir::Constant::Numeric(n) => DataSource::Constant(*n),
+                            crate::optir::Constant::Numeric(c) => DataSource::Constant(*c),
                             crate::optir::Constant::Label(l) => {
                                 DataSource::Label(&label_names[unsafe { l.to_index() } as usize])
                             }
                         },
-                    });
-                }
-                Op::Phi(_) => {}
-                Op::Call {
-                    label,
-                    args: _,
-                    usage_info_index: _,
-                } => assembly.push(AssemblyOp::Call {
-                    label: &label_names[unsafe { label.to_index() } as usize],
-                }),
-                Op::Add { lhs, rhs } => {
-                    let lhs = real_registers[unsafe { lhs.to_index() } as usize];
-                    let rhs = real_registers[unsafe { rhs.to_index() } as usize];
-                    let (lhs, rhs) = if lhs == target_register {
-                        (lhs, rhs)
-                    } else if rhs == target_register {
-                        (rhs, lhs)
-                    } else {
-                        assembly.push(AssemblyOp::Mov {
-                            dest: target_register,
-                            source: DataSource::Register(lhs),
+                    }),
+                    Op::Phi(_) => {}
+                    Op::Call {
+                        label,
+                        args,
+                        usage_info_index,
+                    } => {
+                        let target_block_index = unsafe { label.to_index() } as usize;
+                        // 1. Make sure the arguments are in the right place
+                        {
+                            let currents = args.iter().map(|arg| {
+                                real_registers[unsafe { arg.to_index() } as usize
+                                    + registers.ranges[block_index].start]
+                            });
+                            let targets = real_registers
+                                [registers.ranges[target_block_index].start..]
+                                [..ir.blocks[target_block_index].arg_count]
+                                .iter()
+                                .copied();
+                            line_up_registers(currents, targets, &mut assembly);
+                        }
+
+                        // 2. Make the call
+                        assembly.push(AssemblyOp::Call {
+                            label: &label_names[target_block_index],
                         });
-                        (lhs, rhs)
-                    };
-                    assembly.push(AssemblyOp::Add {
-                        lhs,
-                        rhs: DataSource::Register(rhs),
-                    });
+                        let usage_info = &block.call_return_usages[*usage_info_index];
+                        // 3. Make sure the returns are in the right place
+                        if usage_info.result_usage.is_empty() {
+                            let currents = usage_info.result_binding_range.clone().map(|binding| {
+                                real_registers[unsafe { binding.to_index() } as usize
+                                    + registers.ranges[block_index].start]
+                            });
+                            let max_ret_index = usage_info.result_usage.iter().copied().max();
+                            // SAFE: we checked that result_usage is not empty.
+                            let max_ret_index = unsafe { max_ret_index.unwrap_unchecked() };
+
+                            // the selected return block must have at LEAST max_ret_index values to
+                            // return.
+                            let selected_return_block_index = ir.return_blocks[target_block_index]
+                                .iter()
+                                .copied()
+                                .map(|index| unsafe { index.to_index() } as usize)
+                                .find(|index| ir.return_counts[*index] > max_ret_index)
+                                .expect("this block should return the needed values");
+
+                            let targets = if let CFTransfer::Return(returns) =
+                                &ir.blocks[selected_return_block_index].end
+                            {
+                                usage_info.result_usage.iter().copied().map(|ret_index| returns[ret_index as usize]).map(|binding| unsafe { binding.to_index() } as usize + registers.ranges[selected_return_block_index].start).map(|global_index| real_registers[global_index])
+                            } else {
+                                unreachable!("blocks marked as return blocks have to return")
+                            };
+
+                            line_up_registers(currents, targets, &mut assembly);
+                        }
+                    }
+                    Op::Add { lhs, rhs } => {
+                        let lhs = unsafe { lhs.to_index() } as usize
+                            + registers.ranges[block_index].start;
+                        let rhs = unsafe { rhs.to_index() } as usize
+                            + registers.ranges[block_index].start;
+                        let lhs = real_registers[lhs];
+                        let rhs = real_registers[rhs];
+
+                        let (lhs, rhs) = if lhs == target_register {
+                            (lhs, rhs)
+                        } else if rhs == target_register {
+                            (rhs, lhs)
+                        } else {
+                            assembly.push(AssemblyOp::Mov {
+                                dest: lhs,
+                                source: DataSource::Register(rhs),
+                            });
+                            (lhs, rhs)
+                        };
+
+                        assembly.push(AssemblyOp::Add {
+                            lhs,
+                            rhs: DataSource::Register(rhs),
+                        });
+                    }
                 }
             }
-            last_compiled_op_index = Some(op_index);
-        }
-        match &block_ends[block_index] {
-            CFTransfer::Return(_) => assembly.push(AssemblyOp::Ret),
-            CFTransfer::DirectBranch { .. } => todo!(),
-            CFTransfer::ConditionalBranch { .. } => todo!(),
+            match &block.end {
+                CFTransfer::Return(_) => {
+                    assembly.push(AssemblyOp::Ret);
+                }
+                CFTransfer::DirectBranch { .. } => todo!(),
+                CFTransfer::ConditionalBranch { .. } => todo!(),
+            }
         }
 
         output.write(b".text\n.intel_syntax noprefix\n")?;
 
-        for label in exported_labels {
+        for label in label_map {
             writeln!(output, ".global {}", label)?;
         }
 
@@ -385,5 +429,24 @@ impl Architecture for X86_64Nasm {
         }
 
         Ok(())
+    }
+}
+
+fn line_up_registers(
+    current: impl IntoIterator<Item = x86_64_nasm::Register>,
+
+    target: impl IntoIterator<Item = x86_64_nasm::Register>,
+    assembly: &mut Vec<AssemblyOp>,
+) {
+    // build a map of which registers have to be moved
+    let dependency_map = current.into_iter().zip(target).collect();
+
+    let mut dep_order = crate::DependencyOrderIter::new(dependency_map);
+
+    for (current, target) in &mut dep_order {
+        assembly.push(AssemblyOp::Mov {
+            dest: target,
+            source: DataSource::Register(current),
+        })
     }
 }

@@ -3,6 +3,8 @@
 //! require using `unsafe` so that using them as bare indices to anything
 //! becomes a burde.
 
+use std::ops::Range;
+
 use crate::arch;
 
 // NOTE: might be able to lower binding indices to `u16`
@@ -10,7 +12,7 @@ use crate::arch;
 // We keep registers as indices into
 // a register table (to be free in terms of
 // defining architectures)
-#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Hash)]
 #[repr(transparent)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Register(u8); // no way your machine has more that 256 fixed registers
@@ -32,6 +34,20 @@ impl RegisterRange {
 
     pub const fn contains(&self, Register(index): Register) -> bool {
         self.start <= index && index < self.end
+    }
+}
+
+impl Iterator for RegisterRange {
+    type Item = Register;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start == self.end {
+            None
+        } else {
+            let reg = self.start;
+            self.start += 1;
+            Some(unsafe { Register::from_index(reg) })
+        }
     }
 }
 
@@ -110,3 +126,5 @@ pub enum Id {
     Binding(Binding),
     Label(Label),
 }
+
+crate::impl_self_dependency_eq!(Label);
