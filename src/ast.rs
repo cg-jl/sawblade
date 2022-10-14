@@ -130,7 +130,7 @@ impl<'a> Parser<'a> {
 
     fn lex_name_end(&mut self) -> &'a str {
         let start = self.offset;
-        while self.current().is_some_and(|c| !is_delim(*c)) {
+        while self.current().is_some_and(|c| !is_delim(c)) {
             self.accept();
         }
         &self.input[start..self.offset]
@@ -169,7 +169,7 @@ impl<'a> Parser<'a> {
         match self.current()? {
             '_' => {
                 self.accept();
-                if self.current().is_some_and(|ch| is_delim(*ch)) {
+                if self.current().is_some_and(|ch| is_delim(ch)) {
                     Some(LRvalue::Ignore)
                 } else {
                     None
@@ -211,7 +211,7 @@ impl<'a> Parser<'a> {
             '"' => {
                 self.accept();
                 let name = self.lex_name_end_nonempty()?;
-                if !self.current().is_some_and(|ch| ch == &'"') {
+                if !self.current().is_some_and(|ch| ch == '"') {
                     None
                 } else {
                     self.accept();

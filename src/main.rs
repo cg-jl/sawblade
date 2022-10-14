@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![feature(new_uninit)]
-#![feature(is_some_with)]
+#![feature(is_some_and)]
 #![feature(allocator_api)]
 #![feature(alloc_layout_extra)]
 #![feature(trusted_len)]
