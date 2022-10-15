@@ -3,8 +3,6 @@
 //! require using `unsafe` so that using them as bare indices to anything
 //! becomes a burde.
 
-use std::ops::Range;
-
 use crate::arch;
 
 // NOTE: might be able to lower binding indices to `u16`

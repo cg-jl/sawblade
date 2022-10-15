@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bitflags::bitflags;
 
 use crate::index;

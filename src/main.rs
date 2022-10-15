@@ -8,7 +8,6 @@
 use sawblade::PackedSlice;
 
 use sawblade::arch::Architecture;
-use sawblade::optir::CFTransfer;
 fn main() {
     let source = include_str!("../examples/test.sawblade");
 
