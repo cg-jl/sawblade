@@ -9,6 +9,7 @@
 //! fault.
 use crate::arch::Architecture;
 use crate::index;
+use core::fmt;
 use std::collections::HashMap;
 
 use crate::ast::{Expr, LinkageLabel, Lvalue, Rvalue, Statement};
@@ -84,7 +85,7 @@ pub enum Value {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Pure {
     Binding(index::Binding),
@@ -507,24 +508,9 @@ fn check_pure_label(pure: &Pure, block_len: u16) -> bool {
 }
 
 #[cfg(feature = "arbitrary")]
-fn check_value_labels(value: &Value, block_len: u16) -> bool {
-    match value {
-        Value::Copied(pures) => pures.iter().all(|pure| check_pure_label(pure, block_len)),
-        Value::Add { lhs, rest } => {
-            check_pure_label(lhs, block_len)
-                && rest.iter().all(|pure| check_pure_label(pure, block_len))
-        }
-        Value::Call { label, params } => {
-            check_arbitrary_label(*label, block_len)
-                && params.iter().all(|pure| check_pure_label(pure, block_len))
-        }
-    }
-}
-
-#[cfg(feature = "arbitrary")]
 fn check_block_labels(block: &Block, block_len: u16) -> bool {
     (match &block.end {
-        End::TailValue(value) => check_value_labels(value, block_len),
+        End::TailValue(value) => check_value(value, block_len),
         End::ConditionalBranch {
             condition,
             label_if_true,
@@ -537,7 +523,24 @@ fn check_block_labels(block: &Block, block_len: u16) -> bool {
     }) && block
         .assigns
         .iter()
-        .all(|assign| check_value_labels(&assign.value, block_len))
+        .all(|assign| check_value(&assign.value, block_len))
+}
+
+#[cfg(feature = "arbitrary")]
+fn check_value(value: &Value, block_len: u16) -> bool {
+    match value {
+        Value::Copied(pures) => {
+            !pures.is_empty() && pures.iter().all(|pure| check_pure_label(pure, block_len))
+        }
+        Value::Add { lhs, rest } => rest
+            .iter()
+            .chain(Some(lhs))
+            .all(|pure| check_pure_label(pure, block_len)),
+        Value::Call { label, params } => {
+            check_arbitrary_label(*label, block_len)
+                && params.iter().all(|pure| check_pure_label(pure, block_len))
+        }
+    }
 }
 
 #[cfg(feature = "arbitrary")]
@@ -550,5 +553,15 @@ pub fn check_arbitary_blocks(blocks: Vec<Block>) -> Result<Vec<Block>, arbitrary
         Err(arbitrary::Error::IncorrectFormat)
     } else {
         Ok(blocks)
+    }
+}
+
+impl fmt::Debug for Pure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Pure::Binding(b) => b.fmt(f),
+            Pure::Label(l) => l.fmt(f),
+            Pure::Constant(c) => c.fmt(f),
+        }
     }
 }
