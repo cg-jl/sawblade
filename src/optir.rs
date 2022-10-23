@@ -182,17 +182,13 @@ pub struct Block {
     /// Each `Op` does not have a separate copy of the bindings they declare
     /// because that information is already available in the binding buckets.
     pub operations: FixedArray<Op>,
+    pub used_bindings_on_branch: FixedArray<index::Binding>,
     pub end: CFTransfer,
 }
 
-/// A set of bindings that are used in other phi statements.
-/// In the source code phi nodes are identified by:
-/// ```sawblade
-/// %a = phi @from-1:[%hello] @from-2:[%world] ...
-/// ```
-/// Those are converted to exported bindings here, and they may have
-/// a (small) vec of blocks they are used in.
-pub type ExportedBindings = HashMap<index::Label, FixedArray<index::Binding>>;
+/// The set of bindings that are used as arguments to the next block,
+/// Given that branches are like calls but without having to prepare things for return.
+pub type ExportedBindings = FixedArray<index::Binding>;
 
 /// Description of how control ends for this block (i.e is transferred
 /// to other block). HLIR blocks with a `BlockIsEmpty` end will be marked
@@ -206,12 +202,8 @@ pub enum CFTransfer {
     /// is dynamic.
     Return(FixedArray<index::Binding>),
     /// a jump. It just jumps into a label. Nothing fancy here.
-    DirectBranch {
-        target: index::Label,
-        exported_bindings: ExportedBindings,
-    },
+    DirectBranch { target: index::Label },
     ConditionalBranch {
-        exported_bindings: ExportedBindings,
         condition_source: index::Binding,
         target_if_true: index::Label,
         target_if_false: index::Label,
@@ -523,7 +515,11 @@ impl BlockBuilder {
         Some(result_binding_range)
     }
 
-    fn release(mut self, end: CFTransfer) -> Block {
+    fn release(
+        mut self,
+        end: CFTransfer,
+        used_bindings_on_branch: FixedArray<index::Binding>,
+    ) -> Block {
         // register usages for end
         match &end {
             CFTransfer::Return(bindings) => {
@@ -537,34 +533,26 @@ impl BlockBuilder {
             }
             // TODO: produce selective block end usages for bindings depending on the branch.
             // NOTE: should it be done in the allocator?
-            CFTransfer::DirectBranch {
-                target: _,
-                exported_bindings,
-            } => exported_bindings
-                .values()
-                .flat_map(|x| x.iter().copied())
-                .for_each(|binding| {
+            CFTransfer::DirectBranch { target: _ } => {
+                used_bindings_on_branch.iter().copied().for_each(|binding| {
                     self.get_usage_bucket(binding).push(bucket::Usage {
                         // each returned binding has to
                         usage_kind: bucket::UsageKind::Exclusive,
                         index: bucket::UsageIndex::BlockEnd,
                     })
-                }),
+                })
+            }
             CFTransfer::ConditionalBranch {
-                exported_bindings,
                 condition_source: _,
                 target_if_true: _,
                 target_if_false: _,
-            } => exported_bindings
-                .values()
-                .flat_map(|x| x.iter().copied())
-                .for_each(|binding| {
-                    self.get_usage_bucket(binding).push(bucket::Usage {
-                        // each returned binding has to
-                        usage_kind: bucket::UsageKind::Exclusive,
-                        index: bucket::UsageIndex::BlockEnd,
-                    })
-                }),
+            } => used_bindings_on_branch.iter().copied().for_each(|binding| {
+                self.get_usage_bucket(binding).push(bucket::Usage {
+                    // each returned binding has to
+                    usage_kind: bucket::UsageKind::Exclusive,
+                    index: bucket::UsageIndex::BlockEnd,
+                })
+            }),
         }
         Block {
             arg_count: self.arg_count,
@@ -577,6 +565,7 @@ impl BlockBuilder {
                 .into_boxed_slice(),
             call_return_usages: self.call_return_usages.into(),
             operations: self.ops.into(),
+            used_bindings_on_branch,
             end,
         }
     }
@@ -665,6 +654,7 @@ impl Block {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             }),
+            // TODO: force bindings on conditional branches?
             crate::hlir::End::ConditionalBranch {
                 condition,
                 label_if_true,
@@ -672,8 +662,6 @@ impl Block {
             } => {
                 let condition = builder.compile_pure(condition)?;
                 CFTransfer::ConditionalBranch {
-                    // TODO: grab exported bindings from conditionals
-                    exported_bindings: HashMap::new(),
                     condition_source: condition,
                     target_if_true: label_if_true,
                     target_if_false: label_if_false,
@@ -681,7 +669,7 @@ impl Block {
             }
         };
 
-        Some(builder.release(end))
+        Some(builder.release(end, vec![].into_boxed_slice()))
     }
 }
 
@@ -823,12 +811,8 @@ impl MoveLabel for Block {
     unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
         match &mut self.end {
             CFTransfer::Return(_) => (),
-            CFTransfer::DirectBranch {
-                target,
-                exported_bindings: _,
-            } => unsafe { target.move_label(previous, next) },
+            CFTransfer::DirectBranch { target } => unsafe { target.move_label(previous, next) },
             CFTransfer::ConditionalBranch {
-                exported_bindings: _,
                 condition_source: _,
                 target_if_true,
                 target_if_false,
