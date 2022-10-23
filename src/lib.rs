@@ -19,6 +19,7 @@ pub mod arch;
 pub mod ast;
 pub mod hlir;
 pub mod index;
+pub mod llir;
 pub mod optir;
 
 #[derive(Debug)]
@@ -183,5 +184,55 @@ impl<T, A: core::alloc::Allocator> Drop for BoxIntoIter<T, A> {
                 core::alloc::Layout::array::<T>(self.len).unwrap(),
             )
         }
+    }
+}
+
+// a wrapper around a buffer that is initialized linearly.
+// All of its functions are forcibly inlined since they're there just
+// to remove excess of variables from functions so that they can be more
+// readable. But the compiler should see the whole variable situation.
+struct InitVec<T, A: core::alloc::Allocator = std::alloc::Global> {
+    buffer: Box<[core::mem::MaybeUninit<T>], A>,
+    written: usize,
+    len: usize,
+}
+
+impl<T> InitVec<T, std::alloc::Global> {
+    #[inline(always)]
+    pub fn new(capacity: usize) -> Self {
+        Self::new_in(capacity, std::alloc::Global)
+    }
+}
+
+impl<T, A: core::alloc::Allocator> InitVec<T, A> {
+    #[inline(always)]
+    pub fn new_in(capacity: usize, alloc: A) -> Self {
+        InitVec {
+            buffer: Box::new_uninit_slice_in(capacity, alloc),
+            written: 0,
+            len: capacity,
+        }
+    }
+
+    #[inline(always)]
+    pub fn push(&mut self, value: T) {
+        assert!(
+            self.written != self.len,
+            "allocation size was not sufficient! {}",
+            self.len
+        );
+        self.buffer[self.written].write(value);
+        self.written += 1;
+    }
+
+    #[inline(always)]
+    pub fn finish(self) -> Box<[T], A> {
+        assert!(
+            self.written == self.len,
+            "{} leftover uninitialized values",
+            self.len - self.written
+        );
+
+        unsafe { self.buffer.assume_init() }
     }
 }

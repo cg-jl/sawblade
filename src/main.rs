@@ -31,14 +31,14 @@ fn main() {
         unsafe { map.assume_init() }
     };
 
-    sawblade::arch::X86_64Nasm::assemble(
+    let llir = sawblade::llir::IR::from_optir(
         optir,
+        &label_map,
         PackedSlice {
             elements: &registers,
             ranges: &register_ranges,
         },
-        &label_map,
-        &mut output,
-    )
-    .unwrap();
+    );
+
+    sawblade::arch::X86_64Nasm::assemble(llir, &label_map, &mut output).unwrap();
 }
