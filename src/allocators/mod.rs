@@ -127,12 +127,7 @@ impl ActiveBindingSet {
     }
 
     fn remove(&mut self, binding: u16) -> bool {
-        let found = self
-            .bindings
-            .iter()
-            .copied()
-            .enumerate()
-            .find_map(|(index, other)| if other == binding { Some(index) } else { None });
+        let found = self.bindings.iter().position(|other| other == &binding);
 
         if let Some(i) = found {
             self.bindings.remove(i);
