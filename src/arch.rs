@@ -269,7 +269,6 @@ impl Architecture for X86_64Nasm {
         };
 
         // TODO: assembly-ready IR:
-        //  - no phi statements
         //  - everything in (op dest sources...) format
         //  - ends in ret | branch on <this exact flag> | just jump
         //  - inserted "get <this flag> into CPU state from <this register>" pseudo-instructions
@@ -307,7 +306,6 @@ impl Architecture for X86_64Nasm {
                             }
                         },
                     }),
-                    Op::Phi(_) => {}
                     Op::Call {
                         label,
                         args,

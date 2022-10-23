@@ -243,7 +243,6 @@ pub struct PhiSelector {
 #[derive(Debug)]
 pub enum Op {
     Constant(Constant),
-    Phi(FixedArray<PhiSelector>),
     Call {
         label: index::Label,
         args: FixedArray<index::Binding>,
@@ -809,9 +808,6 @@ impl MoveLabel for Op {
     unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
         match self {
             Op::Constant(c) => unsafe { c.move_label(previous, next) },
-            Op::Phi(nodes) => nodes
-                .iter_mut()
-                .for_each(|node| unsafe { node.move_label(previous, next) }),
             Op::Call {
                 label,
                 args: _,
