@@ -242,8 +242,9 @@ fn resolve_allocs_from_spec<'alloc_bindings, A>(
     allocated_bindings.extend((0..spec[block_index].arguments.len() as u16));
 
     match &block.end {
-        optir::CFTransfer::Return(bindings) => {
-            for (index, (binding, register)) in bindings
+        optir::CFTransfer::Return => {
+            for (index, (binding, register)) in block
+                .exported_bindings
                 .iter()
                 .copied()
                 .zip(spec[block_index].returns.iter().copied())

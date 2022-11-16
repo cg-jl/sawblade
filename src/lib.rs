@@ -9,6 +9,7 @@
 #![feature(maybe_uninit_uninit_array)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(ptr_internals)]
+#![feature(iterator_try_collect)]
 
 use std::{
     collections::{HashMap, HashSet},

@@ -16,6 +16,16 @@ use crate::ast::{Expr, LinkageLabel, Lvalue, Rvalue, Statement};
 
 // TODO: Convert tail calls with single parent-child relationship to jumps
 
+bitflags::bitflags! {
+    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    pub struct Flags: u8 {
+        const N = 0b1000;
+        const Z = 0b0100;
+        const C = 0b0010;
+        const V = 0b0001;
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Block {
@@ -114,10 +124,33 @@ impl Pure {
 pub enum End {
     TailValue(Value),
     ConditionalBranch {
-        condition: Pure,
-        label_if_true: index::Label,
-        label_if_false: index::Label,
+        flag: index::Binding,
+        if_true: Redirection,
+        if_false: Redirection,
     },
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct Redirection {
+    pub label: index::Label,
+    pub args: Vec<Pure>,
+}
+
+impl Redirection {
+    pub fn from_ast<'src>(
+        red: crate::ast::Redirection<'src>,
+        binding_map: &BindingMap<'src>,
+        label_map: &LabelMap<'src>,
+    ) -> Option<Self> {
+        let crate::ast::Redirection { label, args } = red;
+        let label = label_map.get_label_index(label)?;
+        let args = args
+            .into_iter()
+            .map(|a| Pure::from_ast(a, binding_map, label_map))
+            .try_collect()?;
+        Some(Self { label, args })
+    }
 }
 
 fn register_list_from_ast<'s, A: Architecture, L: IntoIterator<Item = &'s str>>(
@@ -146,7 +179,7 @@ impl<Arch> Spec<Arch> {
     }
 }
 
-struct BindingMap<'a>(HashMap<&'a str, u16>);
+pub struct BindingMap<'a>(HashMap<&'a str, u16>);
 
 impl<'a> BindingMap<'a> {
     fn expect_binding_index(&self, name: &'a str) -> index::Binding {
@@ -213,19 +246,18 @@ fn expr_as_br_cond<'src>(
     expr: Expr<'src>,
     binding_map: &BindingMap<'src>,
     label_map: &LabelMap<'src>,
-) -> Option<Result<(Pure, index::Label, index::Label), Expr<'src>>> {
-    // br-cond <cond> @true-label @false-label
+) -> Option<Result<(index::Binding, Redirection, Redirection), Expr<'src>>> {
     Some(
-        if let Expr::Insn {
-            name: "br-cond",
-            args,
+        if let Expr::ConditionalBranch {
+            flag,
+            if_true,
+            if_false,
         } = expr
         {
-            let mut args = args.into_iter();
-            let condition = Pure::from_ast(args.next()?, binding_map, label_map)?;
-            let label_if_true = expect_label_from_ast(args.next()?, label_map)?;
-            let label_if_false = expect_label_from_ast(args.next()?, label_map)?;
-            Ok((condition, label_if_true, label_if_false))
+            let flag = binding_map.get_binding_index(flag)?;
+            let if_true = Redirection::from_ast(if_true, binding_map, label_map)?;
+            let if_false = Redirection::from_ast(if_false, binding_map, label_map)?;
+            Ok((flag, if_true, if_false))
         } else {
             Err(expr)
         },
@@ -268,8 +300,9 @@ fn expr_as_value<'src>(
         Expr::Copied(values) => values
             .into_iter()
             .map(|arg| Pure::from_ast(arg, binding_map, label_map))
-            .collect::<Option<_>>()
+            .try_collect()
             .map(Value::Copied),
+        Expr::ConditionalBranch { .. } => None,
     }
 }
 
@@ -337,10 +370,10 @@ impl Block {
             // TODO: check if the return value is a `br` insn
             crate::ast::Statement::Return(expr) => {
                 match expr_as_br_cond(expr, &binding_map, label_map)? {
-                    Ok((condition, label_if_true, label_if_false)) => End::ConditionalBranch {
-                        condition,
-                        label_if_true,
-                        label_if_false,
+                    Ok((flag, if_true, if_false)) => End::ConditionalBranch {
+                        flag,
+                        if_true,
+                        if_false,
                     },
                     Err(other) => End::TailValue(expr_as_value(other, &binding_map, label_map)?),
                 }

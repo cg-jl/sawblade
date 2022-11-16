@@ -44,12 +44,24 @@ pub enum Statement<'a> {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct Redirection<'a> {
+    pub label: &'a str,
+    pub args: Vec<Rvalue<'a>>,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Expr<'a> {
     Insn {
         name: &'a str,
         args: Vec<Rvalue<'a>>,
     },
     Copied(Vec<Rvalue<'a>>),
+    ConditionalBranch {
+        flag: &'a str,
+        if_true: Redirection<'a>,
+        if_false: Redirection<'a>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]

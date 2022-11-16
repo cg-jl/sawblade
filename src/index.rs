@@ -71,6 +71,18 @@ pub struct Label(u16); // no more than 65536 labels allowed
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Binding(u16);
 
+#[derive(Clone, Copy)]
+pub struct CopyableRange<T> {
+    pub start: T,
+    pub end: T,
+}
+
+impl<T: core::fmt::Debug> core::fmt::Debug for CopyableRange<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}..{:?}", self.start, self.end)
+    }
+}
+
 impl std::fmt::Debug for Binding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("%")?;

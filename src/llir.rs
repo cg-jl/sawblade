@@ -123,12 +123,12 @@ fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlic
                             .find(|index| ir.return_counts[*index] > max_ret_index)
                             .expect("this call should return the needed values");
 
-                        let targets = if let CFTransfer::Return(returns) =
+                        let targets = if let CFTransfer::Return =
                             &ir.blocks[selected_return_block_index].end
                         {
                             usage_info.result_usage.iter()
                                 .copied()
-                                .map(|ret_index| returns[ret_index as usize])
+                                .map(|ret_index| ir.blocks[selected_return_block_index].exported_bindings[ret_index as usize])
                                 .map(|binding| unsafe { binding.to_index() } as usize + registers.ranges[selected_return_block_index].start).map(|global_index| registers.elements[global_index])
                         } else {
                             unreachable!("blocks marked as return blocks HAVE to return")
@@ -165,7 +165,7 @@ fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlic
         }
 
         match &block.end {
-            CFTransfer::Return(_) => ops.push(Op::Ret),
+            CFTransfer::Return => ops.push(Op::Ret),
             CFTransfer::DirectBranch { .. } => todo!(),
             CFTransfer::ConditionalBranch { .. } => todo!(),
         }

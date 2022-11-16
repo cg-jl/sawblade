@@ -182,7 +182,9 @@ pub struct Block {
     /// Each `Op` does not have a separate copy of the bindings they declare
     /// because that information is already available in the binding buckets.
     pub operations: FixedArray<Op>,
-    pub used_bindings_on_branch: FixedArray<index::Binding>,
+    /// When a block leaves execution, it may yield some data with it. The bindings that are
+    /// yielded are stored here.
+    pub exported_bindings: FixedArray<index::Binding>,
     pub end: CFTransfer,
 }
 
@@ -195,19 +197,35 @@ pub type ExportedBindings = FixedArray<index::Binding>;
 /// as empty blocks and inline wherever they're used to a no-op. They
 /// don't return anything so a checker pass will catch anything that is
 /// bound to them.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum CFTransfer {
     /// Return a set of values back to the caller.
     /// It's like a direct branch, except the target label
     /// is dynamic.
-    Return(FixedArray<index::Binding>),
+    Return,
     /// a jump. It just jumps into a label. Nothing fancy here.
     DirectBranch { target: index::Label },
+    /// A branch that depends directly on a set of flags, set by a binding.
+    /// The exported array from the block is shared between the true and false branches, where
+    /// ..true_branch_binding_count is the range of the true branch and the rest is for the false
+    /// branch.
     ConditionalBranch {
-        condition_source: index::Binding,
+        stored_flag: crate::arch::FlagSet,
+        flag_definition: index::Binding,
         target_if_true: index::Label,
         target_if_false: index::Label,
+        true_branch_binding_count: u8,
     },
+}
+
+/// Indicates that control flow is being passed with data
+// TODO: think of a better way to store redirections so they're more accessible from ForwardEdge's.
+// We need to store the conditionally passed data somewhere.
+#[derive(Debug, Clone, Copy)]
+pub struct Redirection {
+    pub target: index::Label,
+    /// Each redirection
+    pub exported_count: u8,
 }
 
 #[derive(Debug)]
@@ -301,6 +319,7 @@ pub struct IR {
 
 struct BlockBuilder {
     hlir_results: HashMap<index::Binding, index::Binding>,
+    flag_definitions: HashMap<index::Binding, crate::arch::FlagSet>,
     ops: Vec<Op>,
     arg_count: usize,
     binding_definitions: Vec<bucket::Definition>,
@@ -515,45 +534,14 @@ impl BlockBuilder {
         Some(result_binding_range)
     }
 
-    fn release(
-        mut self,
-        end: CFTransfer,
-        used_bindings_on_branch: FixedArray<index::Binding>,
-    ) -> Block {
+    fn release(mut self, end: CFTransfer, exported_bindings: FixedArray<index::Binding>) -> Block {
         // register usages for end
-        match &end {
-            CFTransfer::Return(bindings) => {
-                bindings.iter().copied().for_each(|binding| {
-                    self.get_usage_bucket(binding).push(bucket::Usage {
-                        // each returned binding has to
-                        usage_kind: bucket::UsageKind::Exclusive,
-                        index: bucket::UsageIndex::BlockEnd,
-                    })
-                });
-            }
-            // TODO: produce selective block end usages for bindings depending on the branch.
-            // NOTE: should it be done in the allocator?
-            CFTransfer::DirectBranch { target: _ } => {
-                used_bindings_on_branch.iter().copied().for_each(|binding| {
-                    self.get_usage_bucket(binding).push(bucket::Usage {
-                        // each returned binding has to
-                        usage_kind: bucket::UsageKind::Exclusive,
-                        index: bucket::UsageIndex::BlockEnd,
-                    })
-                })
-            }
-            CFTransfer::ConditionalBranch {
-                condition_source: _,
-                target_if_true: _,
-                target_if_false: _,
-            } => used_bindings_on_branch.iter().copied().for_each(|binding| {
-                self.get_usage_bucket(binding).push(bucket::Usage {
-                    // each returned binding has to
-                    usage_kind: bucket::UsageKind::Exclusive,
-                    index: bucket::UsageIndex::BlockEnd,
-                })
-            }),
-        }
+        exported_bindings.iter().copied().for_each(|binding| {
+            self.get_usage_bucket(binding).push(bucket::Usage {
+                usage_kind: bucket::UsageKind::Exclusive,
+                index: bucket::UsageIndex::BlockEnd,
+            })
+        });
         Block {
             arg_count: self.arg_count,
             binding_defs: self.binding_definitions.into(),
@@ -565,7 +553,7 @@ impl BlockBuilder {
                 .into_boxed_slice(),
             call_return_usages: self.call_return_usages.into(),
             operations: self.ops.into(),
-            used_bindings_on_branch,
+            exported_bindings,
             end,
         }
     }
@@ -589,6 +577,7 @@ impl Block {
                 })
                 .collect(),
             ops: Vec::new(), // NOTE: we can have a pre-estimate about how many ops from a quick
+            flag_definitions: HashMap::new(),
             // scan of the assignments
             arg_count: hlir_block.gets.len(),
             binding_definitions: arg_buckets.collect(),
@@ -638,38 +627,56 @@ impl Block {
             }
         }
 
-        let end = match hlir_block.end {
-            crate::hlir::End::TailValue(value) => CFTransfer::Return(match value {
-                crate::hlir::Value::Copied(pures) => builder.compile_copied(pures)?,
-                crate::hlir::Value::Add { lhs, rest } => {
-                    vec![builder.compile_add(lhs, rest)?].into_boxed_slice()
-                }
-                crate::hlir::Value::Call { label, params } => builder
-                    .compile_call(
-                        label,
-                        params,
-                        AssignedUsage::All,
-                        block_return_counts[unsafe { label.to_index() } as usize],
-                    )?
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            }),
+        let (end, exported_bindings) = match hlir_block.end {
+            crate::hlir::End::TailValue(value) => (
+                CFTransfer::Return,
+                match value {
+                    crate::hlir::Value::Copied(pures) => builder.compile_copied(pures)?,
+                    crate::hlir::Value::Add { lhs, rest } => {
+                        vec![builder.compile_add(lhs, rest)?].into_boxed_slice()
+                    }
+                    crate::hlir::Value::Call { label, params } => builder
+                        .compile_call(
+                            label,
+                            params,
+                            AssignedUsage::All,
+                            block_return_counts[unsafe { label.to_index() } as usize],
+                        )?
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                },
+            ),
             // TODO: force bindings on conditional branches?
             crate::hlir::End::ConditionalBranch {
-                condition,
-                label_if_true,
-                label_if_false,
+                flag: flag_definition,
+                if_true,
+                if_false,
             } => {
-                let condition = builder.compile_pure(condition)?;
-                CFTransfer::ConditionalBranch {
-                    condition_source: condition,
-                    target_if_true: label_if_true,
-                    target_if_false: label_if_false,
-                }
+                let stored_flag = builder.flag_definitions.get(&flag_definition).copied()?;
+                let target_if_true = if_true.label;
+                let target_if_false = if_false.label;
+                let true_branch_binding_count = if_true.args.len() as u8;
+                let exposed = if_true
+                    .args
+                    .into_iter()
+                    .chain(if_false.args)
+                    .map(|arg| builder.compile_pure(arg))
+                    .try_collect::<Vec<_>>()?
+                    .into_boxed_slice();
+                (
+                    CFTransfer::ConditionalBranch {
+                        stored_flag,
+                        flag_definition,
+                        target_if_true,
+                        target_if_false,
+                        true_branch_binding_count,
+                    },
+                    exposed,
+                )
             }
         };
 
-        Some(builder.release(end, vec![].into_boxed_slice()))
+        Some(builder.release(end, exported_bindings))
     }
 }
 
@@ -711,7 +718,6 @@ impl IR {
                         ForwardEdge::Direct(target)
                     }
                     CFTransfer::ConditionalBranch {
-                        condition_source: _,
                         target_if_true,
                         target_if_false,
                         ..
@@ -810,12 +816,12 @@ impl MoveLabel for Block {
     #[inline]
     unsafe fn move_label(&mut self, previous: index::Label, next: index::Label) {
         match &mut self.end {
-            CFTransfer::Return(_) => (),
+            CFTransfer::Return => (),
             CFTransfer::DirectBranch { target } => unsafe { target.move_label(previous, next) },
             CFTransfer::ConditionalBranch {
-                condition_source: _,
                 target_if_true,
                 target_if_false,
+                ..
             } => unsafe {
                 target_if_true.move_label(previous, next);
                 target_if_false.move_label(previous, next);
@@ -939,12 +945,12 @@ fn compute_return_counts(
                 }
             }
             End::ConditionalBranch {
-                condition: _,
-                label_if_true,
-                label_if_false,
+                flag: _,
+                if_true,
+                if_false,
             } => {
-                let true_index = unsafe { label_if_true.to_index() };
-                let false_index = unsafe { label_if_false.to_index() };
+                let true_index = unsafe { if_true.label.to_index() };
+                let false_index = unsafe { if_false.label.to_index() };
                 if malformed_branches.contains(&true_index)
                     || malformed_branches.contains(&false_index)
                 {
