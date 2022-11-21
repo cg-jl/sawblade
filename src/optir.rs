@@ -672,11 +672,30 @@ impl Block {
                     instruction,
                     check_flags,
                 } => {
-                    builder
-                        .flag_definitions
-                        .entry(instruction)
-                        .and_modify(|u| *u = check_flags.union(*u))
-                        .or_insert(check_flags);
+                    // Same reason as add: obtaining the flags is just a pure read operation, if
+                    // we're not doing anything with them we may as well not compile it.
+                    if let Some(crate::hlir::AssignedBinding {
+                        binding: target, ..
+                    }) = assignment.used_bindings.into_iter().next()
+                    {
+                        let instruction = builder.get_registered_alias(instruction)?;
+                        let op_index = builder.ops.len() as u16;
+                        let binding = builder.define(Op::FetchFlags(check_flags));
+                        builder.get_usage_bucket(instruction).push(bucket::Usage {
+                            usage_kind: bucket::UsageKind::Exclusive,
+                            index: bucket::UsageIndex::Op(op_index),
+                        });
+                        unsafe {
+                            builder.register_result(target, binding);
+                        }
+
+                        // we need to create another "binding", and register its usage as flag
+                        builder
+                            .flag_definitions
+                            .entry(binding)
+                            .and_modify(|u| *u = check_flags.union(*u))
+                            .or_insert(check_flags);
+                    }
                 }
             }
         }
@@ -712,6 +731,7 @@ impl Block {
                 if_true,
                 if_false,
             } => {
+                let flag_definition = builder.get_registered_alias(flag_definition)?;
                 let stored_flag = builder.flag_definitions.get(&flag_definition).copied()?;
                 let target_if_true = if_true.label;
                 let target_if_false = if_false.label;
@@ -723,6 +743,12 @@ impl Block {
                     .map(|arg| builder.compile_pure(arg))
                     .try_collect::<Vec<_>>()?
                     .into_boxed_slice();
+                builder
+                    .get_usage_bucket(flag_definition)
+                    .push(bucket::Usage {
+                        usage_kind: bucket::UsageKind::Exclusive,
+                        index: bucket::UsageIndex::BlockEnd,
+                    });
                 (
                     CFTransfer::ConditionalBranch {
                         stored_flag,
