@@ -391,7 +391,6 @@ impl Architecture for X86_64Nasm {
             last_start = *start;
         }
 
-
         output.write(b".text\n.intel_syntax noprefix\n")?;
 
         for label in exported_labels {
