@@ -9,9 +9,10 @@ use sawblade::PackedSlice;
 
 use sawblade::arch::Architecture;
 fn main() {
-    let source = include_str!("../examples/test.sawblade");
+    let source =
+        std::fs::read_to_string(std::env::args().nth(1).expect("must have <file>")).unwrap();
 
-    let ast = sawblade::ast::parse_source(source);
+    let ast = sawblade::ast::parse_source(&source);
     let hlir = sawblade::hlir::IR::<sawblade::arch::X86_64Nasm>::from_ast(ast);
     let optir = sawblade::optir::dissect_from_hlir(hlir.blocks);
     let (registers, register_ranges) =

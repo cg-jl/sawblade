@@ -87,6 +87,7 @@ pub enum Rvalue<'a> {
     Label(&'a str),
     Constant(u64),
     Binding(&'a str),
+    Flags(&'a str),
 }
 
 #[derive(Debug)]
@@ -95,6 +96,7 @@ enum LRvalue<'a> {
     Constant(u64),
     Binding(&'a str),
     Label(&'a str),
+    Flags(&'a str),
 }
 
 impl<'a> LRvalue<'a> {
@@ -103,6 +105,7 @@ impl<'a> LRvalue<'a> {
             Self::Constant(v) => Some(Rvalue::Constant(v)),
             Self::Binding(v) => Some(Rvalue::Binding(v)),
             Self::Label(l) => Some(Rvalue::Label(l)),
+            Self::Flags(f) => Some(Rvalue::Flags(f)),
             Self::Ignore => None,
         }
     }
@@ -177,6 +180,22 @@ impl<'a> Parser<'a> {
         Some(value)
     }
 
+    fn parse_flagset(&mut self) -> Option<&'a str> {
+        let start = self.offset;
+        while self
+            .current()
+            .is_some_and(|c| c == 'n' || c == 'z' || c == 'c' || c == 'v')
+        {
+            self.accept();
+        }
+
+        if start == self.offset {
+            None
+        } else {
+            Some(&self.input[start..self.offset])
+        }
+    }
+
     fn parse_lrvalue(&mut self) -> Option<LRvalue<'a>> {
         match self.current()? {
             '_' => {
@@ -196,7 +215,7 @@ impl<'a> Parser<'a> {
                 self.lex_name_end_nonempty().map(LRvalue::Label)
             }
             ch if ch.is_ascii_digit() => self.parse_constant().map(LRvalue::Constant),
-            _ => None,
+            _ => self.parse_flagset().map(LRvalue::Flags),
         }
     }
 
@@ -347,11 +366,72 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_redirection(&mut self) -> Option<Redirection<'a>> {
+        let label = self.parse_rvalue().and_then(|r| {
+            if let Rvalue::Label(l) = r {
+                Some(l)
+            } else {
+                None
+            }
+        })?;
+        if self.current() != Some('(') {
+            return None;
+        }
+        self.accept();
+        self.whitespace();
+        let mut args = Vec::new();
+
+        while let Some(arg) = self.parse_rvalue() {
+            args.push(arg);
+            self.whitespace();
+            if self.current()? == ',' {
+                self.whitespace();
+                continue;
+            } else {
+                break;
+            }
+        }
+        self.whitespace();
+        if self.current()? != ')' {
+            return None;
+        }
+        self.accept();
+
+        Some(Redirection { label, args })
+    }
+
     fn parse_statement(&mut self) -> Option<Statement<'a>> {
         // try to recognize a return by instruction
         if let Some(name) = self.lex_insn_name() {
-            let args = self.collect_rvalues()?;
-            Some(Statement::Return(Expr::Insn { name, args }))
+            let expr = if name == "br" {
+                self.whitespace();
+                let flag = self.parse_rvalue().and_then(|f| {
+                    if let Rvalue::Binding(name) = f {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })?;
+                self.whitespace();
+                let if_true = self.parse_redirection()?;
+                self.whitespace();
+                let if_false = self.parse_redirection()?;
+                Expr::ConditionalBranch {
+                    flag,
+                    if_true,
+                    if_false,
+                }
+            } else {
+                let args = self.collect_rvalues()?;
+                Expr::Insn { name, args }
+            };
+            Some(Statement::Return(expr))
+            // if name == "br" {
+
+            // } else {
+            //     let args = self.collect_rvalues()?;
+            //     Some(Statement::Return(Expr::Insn { name, args }))
+            // }
         } else {
             let mut lrvalues = Vec::new();
             loop {
@@ -466,6 +546,7 @@ impl<'a> Parser<'a> {
             }
             break;
         }
+        self.whitespace();
 
         if self.current() != Some('}') {
             None

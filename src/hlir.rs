@@ -7,7 +7,7 @@
 //! user errors in the case of there being any. Past
 //! this point any malformed IR is purely the program's
 //! fault.
-use crate::arch::Architecture;
+use crate::arch::{Architecture, FlagSet};
 use crate::index;
 use core::fmt;
 use std::collections::HashMap;
@@ -93,6 +93,13 @@ pub enum Value {
         label: index::Label,
         params: Vec<Pure>,
     },
+    /// Retrieves the CPU flags that some instruction produces.
+    /// UNSTABLE: sawblade still doesn't reorder the flag queries so that our queried flags are
+    /// still valid.
+    Flags {
+        instruction: index::Binding,
+        check_flags: FlagSet,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -101,6 +108,18 @@ pub enum Pure {
     Binding(index::Binding),
     Label(index::Label),
     Constant(u64),
+}
+
+fn parse_flags(set: &str) -> FlagSet {
+    set.chars()
+        .map(|c| match c {
+            'z' => FlagSet::ZERO,
+            'n' => FlagSet::NEGATIVE,
+            'c' => FlagSet::CARRY,
+            'v' => FlagSet::OVERFLOW,
+            _ => unreachable!("parser is dumb and doesn't parse flags correctly"),
+        })
+        .fold(FlagSet::empty(), FlagSet::union)
 }
 
 impl Pure {
@@ -115,6 +134,7 @@ impl Pure {
             crate::ast::Rvalue::Binding(binding) => {
                 bindings.get_binding_index(binding).map(Self::Binding)
             }
+            Rvalue::Flags(_) => None,
         }
     }
 }
@@ -293,6 +313,27 @@ fn expr_as_value<'src>(
                         .collect();
 
                     Some(Value::Call { label, params })
+                }
+                "flags" => {
+                    let mut args = args.into_iter();
+                    let binding = args.next().and_then(|r| {
+                        if let Rvalue::Binding(b) = r {
+                            binding_map.get_binding_index(b)
+                        } else {
+                            None
+                        }
+                    })?;
+                    let flags = args.next().and_then(|r| {
+                        if let Rvalue::Flags(fl) = r {
+                            Some(parse_flags(fl))
+                        } else {
+                            None
+                        }
+                    })?;
+                    Some(Value::Flags {
+                        instruction: binding,
+                        check_flags: flags,
+                    })
                 }
                 _ => None,
             }

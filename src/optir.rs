@@ -624,6 +624,16 @@ impl Block {
                         block_return_counts[unsafe { label.to_index() } as usize],
                     );
                 }
+                Value::Flags {
+                    instruction,
+                    check_flags,
+                } => {
+                    builder
+                        .flag_definitions
+                        .entry(instruction)
+                        .and_modify(|u| *u = check_flags.union(*u))
+                        .or_insert(check_flags);
+                }
             }
         }
 
@@ -644,6 +654,9 @@ impl Block {
                         )?
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
+                    crate::hlir::Value::Flags { .. } => {
+                        todo!("returning flags is not yet supported")
+                    }
                 },
             ),
             // TODO: force bindings on conditional branches?
@@ -941,6 +954,9 @@ fn compute_return_counts(
                             solved.insert(next.index);
                             continue;
                         }
+                    }
+                    crate::hlir::Value::Flags { .. } => {
+                        todo!("returning flags is not yet supported")
                     }
                 }
             }
