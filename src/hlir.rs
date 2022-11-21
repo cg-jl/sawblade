@@ -88,6 +88,10 @@ pub enum Value {
         lhs: Pure,
         rest: Vec<Pure>,
     },
+    Sub {
+        lhs: Pure,
+        rest: Vec<Pure>,
+    },
     // TODO: accept bindings as dynamic call labels (needed for e.g vtable implementation)
     Call {
         label: index::Label,
@@ -302,6 +306,15 @@ fn expr_as_value<'src>(
                     let rest = args.collect();
 
                     Some(Value::Add { lhs, rest })
+                }
+                "sub" => {
+                    let mut args = args
+                        .into_iter()
+                        .rev()
+                        .map(|arg| Pure::from_ast(arg, binding_map, label_map));
+                    let lhs = args.next()??;
+                    let rest = args.try_collect()?;
+                    Some(Value::Sub { lhs, rest })
                 }
                 // call @label args...?
                 "call" => {

@@ -187,6 +187,10 @@ mod x86_64_nasm {
             lhs: Register,
             rhs: DataSource<'a>,
         },
+        Sub {
+            lhs: Register,
+            rhs: DataSource<'a>,
+        },
         // XXX: I can't use offsets for x86_64 until I can control how many bytes is each
         // instruction (sized constants might also play here). That's what you get from variable
         // length instructions.
@@ -213,6 +217,7 @@ mod x86_64_nasm {
                 Self::Add { lhs, rhs } => write!(f, "add {}, {}", lhs.name(), rhs),
                 Self::Call { label } => write!(f, "call {}", label),
                 Self::Ret => f.write_str("ret"),
+                AssemblyOp::Sub { lhs, rhs } => write!(f, "add {}, {}", lhs.name(), rhs),
             }
         }
     }
@@ -284,6 +289,51 @@ impl Architecture for X86_64Nasm {
                         dest: Register::expect_from_number(*target),
                         source: constant_to_ds(value),
                     },
+                    crate::llir::Op::USub { target, lhs, rhs } => {
+                        let (lhs, rhs) = if target == lhs {
+                            (Register::expect_from_number(*lhs), input_to_ds(rhs))
+                        } else {
+                            if let Input::Register(r) = rhs {
+                                if r == target {
+                                    (
+                                        Register::expect_from_number(*r),
+                                        DataSource::Register(Register::expect_from_number(*lhs)),
+                                    )
+                                } else {
+                                    let target = Register::expect_from_number(*target);
+                                    assembly.push(AssemblyOp::Mov {
+                                        dest: target,
+                                        source: DataSource::Register(Register::expect_from_number(
+                                            *r,
+                                        )),
+                                    });
+                                    next_offset += 1;
+
+                                    (
+                                        target,
+                                        DataSource::Register(Register::expect_from_number(*lhs)),
+                                    )
+                                }
+                            } else {
+                                let target = Register::expect_from_number(*target);
+                                writeln!(
+                                    output,
+                                    "\t{}",
+                                    AssemblyOp::Mov {
+                                        dest: target,
+                                        source: input_to_ds(rhs)
+                                    }
+                                )?;
+
+                                (
+                                    target,
+                                    DataSource::Register(Register::expect_from_number(*lhs)),
+                                )
+                            }
+                        };
+
+                        AssemblyOp::Sub { lhs, rhs }
+                    }
                     crate::llir::Op::UAdd { target, lhs, rhs } => {
                         let (lhs, rhs) = if target == lhs {
                             (Register::expect_from_number(*lhs), input_to_ds(rhs))

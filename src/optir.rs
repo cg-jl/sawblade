@@ -19,6 +19,8 @@
 //! into architecture-specific representation (i.e assembly), with
 //! label linkage information which is kept from HLIR.
 
+use crate::arch::FlagSet;
+
 // NOTE: should I look into "data flow graphs"? Since phi nodes
 // here are pretty much not easy to analyze, maybe I need some sort
 // of graph that connects the blocks directly in terms of the data
@@ -267,6 +269,12 @@ pub enum Op {
         lhs: index::Binding,
         rhs: index::Binding,
     },
+    /// Subtract `rhs` from `lhs`.
+    Sub {
+        lhs: index::Binding,
+        rhs: index::Binding,
+    },
+    FetchFlags(FlagSet),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -379,13 +387,18 @@ impl BlockBuilder {
         self.binding_definitions.len() as u16
     }
 
+    #[inline]
+    fn get_registered_alias(&self, hlir_target: index::Binding) -> Option<index::Binding> {
+        self.hlir_results.get(&hlir_target).copied()
+    }
+
     /// Converts an HLIR definition into an OPTIR definition.
     fn compile_pure(&mut self, hlir_value: crate::hlir::Pure) -> Option<index::Binding> {
         match Constant::try_from(hlir_value) {
             // If it's a constant, then we'll have to define a new op
             Ok(constant) => Some(self.define(Op::Constant(constant))),
             // We'll grab the already defined result
-            Err(alias) => self.hlir_results.get(&alias).copied(),
+            Err(alias) => self.get_registered_alias(alias),
         }
     }
 
@@ -444,6 +457,23 @@ impl BlockBuilder {
                 Some(self.define(Op::Add { lhs, rhs }))
             })
         })
+    }
+
+    fn compile_sub(
+        &mut self,
+        lhs: crate::hlir::Pure,
+        rest: Vec<crate::hlir::Pure>,
+    ) -> Option<index::Binding> {
+        rest.into_iter()
+            .try_fold(self.compile_pure(lhs)?, |lhs, rhs| {
+                // Convert rhs to an OPTIR binding
+                let rhs = self.compile_pure(rhs)?;
+                // Regitser usage of current lhs and rhs for this compute op
+                let usage = unsafe { self.usage_for_next_op(bucket::UsageKind::Exclusive) };
+                self.get_usage_bucket(lhs).push(usage);
+                self.get_usage_bucket(rhs).push(usage);
+                Some(self.define(Op::Sub { lhs, rhs }))
+            })
     }
 
     fn compile_copied(
@@ -602,6 +632,20 @@ impl Block {
                         }
                     }
                 }
+                Value::Sub { lhs, rest } => {
+                    // Since subtracting is a pure operation (can't access any
+                    // other data), we'll skip compiling this if there is no
+                    // target
+                    if let Some(crate::hlir::AssignedBinding {
+                        binding: target, ..
+                    }) = assignment.used_bindings.into_iter().next()
+                    {
+                        let result = builder.compile_sub(lhs, rest)?;
+                        unsafe {
+                            builder.register_result(target, result);
+                        }
+                    }
+                }
                 Value::Add { lhs, rest } => {
                     // Since adding is a pure operation (can't access any
                     // other data), we'll skip compiling this if there is no
@@ -644,6 +688,9 @@ impl Block {
                     crate::hlir::Value::Copied(pures) => builder.compile_copied(pures)?,
                     crate::hlir::Value::Add { lhs, rest } => {
                         vec![builder.compile_add(lhs, rest)?].into_boxed_slice()
+                    }
+                    crate::hlir::Value::Sub { lhs, rest } => {
+                        vec![builder.compile_sub(lhs, rest)?].into_boxed_slice()
                     }
                     crate::hlir::Value::Call { label, params } => builder
                         .compile_call(
@@ -821,6 +868,8 @@ impl MoveLabel for Op {
                 usage_info_index: _,
             } => unsafe { label.move_label(previous, next) },
             Op::Add { lhs: _, rhs: _ } => (),
+            Op::FetchFlags(_) => (),
+            Op::Sub { lhs: _, rhs: _ } => (),
         }
     }
 }
@@ -931,7 +980,8 @@ fn compute_return_counts(
                         solved.insert(next.index);
                         continue;
                     }
-                    crate::hlir::Value::Add { lhs: _, rest: _ } => {
+                    crate::hlir::Value::Add { lhs: _, rest: _ }
+                    | crate::hlir::Value::Sub { lhs: _, rest: _ } => {
                         slice[next.index as usize] = 1;
                         solved.insert(next.index);
                         continue;

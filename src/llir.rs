@@ -7,14 +7,31 @@ use crate::optir::{CFTransfer, Constant};
 use crate::PackedSlice;
 pub enum Op {
     /// set register a to b
-    CopyRegister { target: u8, source: u8 },
+    CopyRegister {
+        target: u8,
+        source: u8,
+    },
     /// Set a constant to a register.
-    SetValue { target: u8, value: Constant },
+    SetValue {
+        target: u8,
+        value: Constant,
+    },
     /// Add two unsigned numbers
-    UAdd { target: u8, lhs: u8, rhs: Input },
+    UAdd {
+        target: u8,
+        lhs: u8,
+        rhs: Input,
+    },
+    USub {
+        target: u8,
+        lhs: u8,
+        rhs: Input,
+    },
 
     /// Call label
-    Call { label: crate::index::Label },
+    Call {
+        label: crate::index::Label,
+    },
 
     /// Return.
     Ret,
@@ -161,6 +178,31 @@ fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlic
                         rhs: Input::Register(rhs),
                     });
                 }
+                crate::optir::Op::Sub { lhs, rhs } => {
+                    let lhs = unsafe {
+                        registers.elements
+                            [lhs.to_index() as usize + registers.ranges[block_index].start]
+                            .as_index()
+                    };
+
+                    let rhs = unsafe {
+                        registers.elements
+                            [rhs.to_index() as usize + registers.ranges[block_index].start]
+                            .as_index()
+                    };
+
+                    let target = unsafe {
+                        registers.elements[binding_index + registers.ranges[block_index].start]
+                            .as_index()
+                    };
+
+                    ops.push(Op::USub {
+                        target,
+                        lhs,
+                        rhs: Input::Register(rhs),
+                    });
+                }
+                crate::optir::Op::FetchFlags(_) => (),
             }
         }
 
