@@ -1,3 +1,5 @@
+use std::mem::MaybeUninit;
+
 use bitflags::bitflags;
 
 use crate::index;
@@ -44,7 +46,7 @@ pub struct RegisterSet {
     /// defines a binding, and if it knows e.g that the binding is just used to branch,
     /// it will reserve a "it's in a branching flag" state for the binding, so that in
     /// practice we won't need more compare instrucions to branch.
-    pub status_flags: FlagSet,
+    pub status_flags: Flags,
     /// The flags register contains the bits for the CPU status flags. It is currently
     /// not considered for storing values, but if present it will enable
     /// storing certain checks to be reused by further conditional set/branch
@@ -57,12 +59,42 @@ pub struct RegisterSet {
     pub flags_register: Option<index::Register>,
 }
 
+// this needs 2 bits of information => 4 * 2 = 8
+#[repr(u8)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum FlagUsage {
+    Dontcare = 0,
+    Active = 1,
+    Unactive = 2,
+}
+
+impl FlagUsage {
+    pub const unsafe fn from_binary(num: u8) -> Self {
+        match num {
+            0 => Self::Dontcare,
+            1 => Self::Active,
+            2 => Self::Unactive,
+            _ => unsafe { core::hint::unreachable_unchecked() },
+        }
+    }
+
+    pub const fn from_bool(b: bool) -> Self {
+        match b {
+            true => Self::Active,
+            false => Self::Unactive,
+        }
+    }
+    pub fn to_binary(self) -> u8 {
+        self as u8
+    }
+}
+
 bitflags! {
-    pub struct FlagSet: u8 {
-        const NEGATIVE = 0b0001;
-        const CARRY = 0b0010;
-        const OVERFLOW = 0b0100;
-        const ZERO = 0b1000;
+    pub struct Flags: u8 {
+        const NEGATIVE = 0b00001;
+        const CARRY = 0b00010;
+        const OVERFLOW = 0b00100;
+        const ZERO = 0b01000;
     }
 }
 
@@ -73,7 +105,7 @@ impl RegisterSet {
             stack_pointer: None,
             frame_pointer: None,
             flags_register: None,
-            status_flags: FlagSet::empty(),
+            status_flags: Flags::empty(),
         }
     }
     pub const fn with_stack_pointer(mut self, stack_pointer: index::Register) -> Self {
@@ -88,7 +120,7 @@ impl RegisterSet {
         self.flags_register = Some(flags_register);
         self
     }
-    pub fn with_status_flags(mut self, status_flags: FlagSet) -> Self {
+    pub fn with_status_flags(mut self, status_flags: Flags) -> Self {
         self.status_flags |= status_flags;
         self
     }
@@ -187,17 +219,77 @@ mod x86_64_nasm {
             lhs: Register,
             rhs: DataSource<'a>,
         },
+
         Sub {
             lhs: Register,
             rhs: DataSource<'a>,
         },
+
+        Xor {
+            lhs: Register,
+            rhs: DataSource<'a>,
+        },
+
         // XXX: I can't use offsets for x86_64 until I can control how many bytes is each
         // instruction (sized constants might also play here). That's what you get from variable
         // length instructions.
         Call {
             label: &'a str,
         },
+
+        Jump {
+            label: &'a str,
+        },
+
+        CJump {
+            label: &'a str,
+            condition: Condition,
+        },
+
         Ret,
+    }
+
+    // http://unixwiz.net/techtips/x86-jumps.html
+    #[derive(Debug)]
+    pub enum Condition {
+        LE,
+        GT,
+        GE,
+        LT,
+        EQ,
+        NE,
+        O,
+        NO,
+    }
+
+    impl Condition {
+        pub const fn from_ir(ir: crate::hlir::Condition) -> Self {
+            match ir {
+                crate::hlir::Condition::LessThan => Self::LT,
+                crate::hlir::Condition::GreaterEqual => Self::GE,
+                crate::hlir::Condition::LessEqual => Self::LE,
+                crate::hlir::Condition::GreaterThan => Self::GT,
+                crate::hlir::Condition::Overflow => Self::O,
+                crate::hlir::Condition::NotOverflow => Self::NO,
+                crate::hlir::Condition::Zero => Self::EQ,
+                crate::hlir::Condition::NotZero => Self::NE,
+            }
+        }
+    }
+
+    impl std::fmt::Display for Condition {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(match self {
+                Condition::LE => "le",
+                Condition::GT => "gt",
+                Condition::GE => "ge",
+                Condition::LT => "lt",
+                Condition::EQ => "e",
+                Condition::NE => "ne",
+                Self::O => "o",
+                Self::NO => "no",
+            })
+        }
     }
 
     impl std::fmt::Display for DataSource<'_> {
@@ -217,7 +309,10 @@ mod x86_64_nasm {
                 Self::Add { lhs, rhs } => write!(f, "add {}, {}", lhs.name(), rhs),
                 Self::Call { label } => write!(f, "call {}", label),
                 Self::Ret => f.write_str("ret"),
-                AssemblyOp::Sub { lhs, rhs } => write!(f, "add {}, {}", lhs.name(), rhs),
+                Self::Xor { lhs, rhs } => write!(f, "xorq {}, {}", lhs.name(), rhs),
+                AssemblyOp::Sub { lhs, rhs } => write!(f, "sub {}, {}", lhs.name(), rhs),
+                AssemblyOp::Jump { label } => write!(f, "jmp {}", label),
+                AssemblyOp::CJump { label, condition } => write!(f, "j{} {}", condition, label),
             }
         }
     }
@@ -253,7 +348,7 @@ impl Architecture for X86_64Nasm {
         })
         .with_stack_pointer(Register::Rsp.as_index())
         .with_frame_pointer(Register::Rbp.as_index())
-        .with_status_flags(FlagSet::all())
+        .with_status_flags(Flags::all())
     }
     fn assemble<'label, W: std::io::Write>(
         mut ir: crate::llir::IR,
@@ -275,11 +370,17 @@ impl Architecture for X86_64Nasm {
 
         let mut assembly = Vec::with_capacity(ir.ops.len());
         let mut last_start = 0;
-        let mut next_offset = 0;
-        let mut dummy_offset = ir.ops.len() as u16; // dummy offset so we can make another iteration.
-        for start in ir.label_offsets.iter_mut().chain(Some(&mut dummy_offset)) {
-            let last_offset = core::mem::replace(&mut next_offset, 0);
-            for op in &ir.ops[last_start as usize..*start as usize] {
+        let mut total_offset = 0;
+        let mut dummy_uninit = MaybeUninit::uninit();
+        let mut new_offsets = Box::new_uninit_slice(ir.label_offsets.len());
+        for (offset, new_offset) in ir
+            .label_offsets
+            .iter()
+            .copied()
+            .zip(new_offsets.iter_mut())
+            .chain(Some((ir.ops.len() as u16, &mut dummy_uninit)))
+        {
+            for op in &ir.ops[last_start as usize..offset as usize] {
                 let pushed_op = match op {
                     crate::llir::Op::CopyRegister { target, source } => AssemblyOp::Mov {
                         dest: Register::expect_from_number(*target),
@@ -290,49 +391,57 @@ impl Architecture for X86_64Nasm {
                         source: constant_to_ds(value),
                     },
                     crate::llir::Op::USub { target, lhs, rhs } => {
-                        let (lhs, rhs) = if target == lhs {
-                            (Register::expect_from_number(*lhs), input_to_ds(rhs))
-                        } else {
+                        'b: {
                             if let Input::Register(r) = rhs {
-                                if r == target {
-                                    (
-                                        Register::expect_from_number(*r),
-                                        DataSource::Register(Register::expect_from_number(*lhs)),
-                                    )
-                                } else {
-                                    let target = Register::expect_from_number(*target);
-                                    assembly.push(AssemblyOp::Mov {
-                                        dest: target,
-                                        source: DataSource::Register(Register::expect_from_number(
-                                            *r,
-                                        )),
-                                    });
-                                    next_offset += 1;
-
-                                    (
-                                        target,
-                                        DataSource::Register(Register::expect_from_number(*lhs)),
-                                    )
-                                }
-                            } else {
-                                let target = Register::expect_from_number(*target);
-                                writeln!(
-                                    output,
-                                    "\t{}",
-                                    AssemblyOp::Mov {
-                                        dest: target,
-                                        source: input_to_ds(rhs)
+                                match (target == lhs, target == r) {
+                                    // this one can escape, since we're going to set a zero.
+                                    // TODO: make it output xor instead of mov.
+                                    (true, true) => {
+                                        let reg = Register::expect_from_number(*target);
+                                        break 'b AssemblyOp::Xor {
+                                            lhs: reg,
+                                            rhs: DataSource::Register(reg),
+                                        };
                                     }
-                                )?;
-
-                                (
-                                    target,
-                                    DataSource::Register(Register::expect_from_number(*lhs)),
-                                )
+                                    // this is a tricky one: we'll make the reversed subtraction
+                                    // and then negate it using XOR
+                                    (false, true) => {
+                                        let reg = Register::expect_from_number(*target);
+                                        assembly.push(AssemblyOp::Sub {
+                                            lhs: reg,
+                                            rhs: DataSource::Register(
+                                                Register::expect_from_number(*r),
+                                            ),
+                                        });
+                                        assembly.push(AssemblyOp::Xor {
+                                            lhs: reg,
+                                            rhs: DataSource::Constant(0xFFFFFFFFFFFFFFFF),
+                                        });
+                                        total_offset += 2;
+                                        break 'b AssemblyOp::Add {
+                                            lhs: reg,
+                                            rhs: DataSource::Constant(1),
+                                        };
+                                    }
+                                    _ => (),
+                                }
                             }
-                        };
+                            let treg = Register::expect_from_number(*target);
+                            if target != lhs {
+                                assembly.push(AssemblyOp::Mov {
+                                    dest: treg,
+                                    source: DataSource::Register(Register::expect_from_number(
+                                        *lhs,
+                                    )),
+                                });
+                                total_offset += 1;
+                            }
 
-                        AssemblyOp::Sub { lhs, rhs }
+                            AssemblyOp::Add {
+                                lhs: Register::expect_from_number(*target),
+                                rhs: input_to_ds(rhs),
+                            }
+                        }
                     }
                     crate::llir::Op::UAdd { target, lhs, rhs } => {
                         let (lhs, rhs) = if target == lhs {
@@ -352,7 +461,7 @@ impl Architecture for X86_64Nasm {
                                             *r,
                                         )),
                                     });
-                                    next_offset += 1;
+                                    total_offset += 1;
 
                                     (
                                         target,
@@ -361,15 +470,11 @@ impl Architecture for X86_64Nasm {
                                 }
                             } else {
                                 let target = Register::expect_from_number(*target);
-                                writeln!(
-                                    output,
-                                    "\t{}",
-                                    AssemblyOp::Mov {
-                                        dest: target,
-                                        source: input_to_ds(rhs)
-                                    }
-                                )?;
-
+                                assembly.push(AssemblyOp::Mov {
+                                    dest: target,
+                                    source: input_to_ds(rhs),
+                                });
+                                total_offset += 1;
                                 (
                                     target,
                                     DataSource::Register(Register::expect_from_number(*lhs)),
@@ -383,13 +488,22 @@ impl Architecture for X86_64Nasm {
                         label: &ir.label_names[unsafe { label.to_index() } as usize],
                     },
                     crate::llir::Op::Ret => AssemblyOp::Ret,
+                    crate::llir::Op::CBranch { condition, target } => AssemblyOp::CJump {
+                        label: &ir.label_names[unsafe { target.to_index() } as usize],
+                        condition: x86_64_nasm::Condition::from_ir(*condition),
+                    },
+                    crate::llir::Op::Branch { target } => AssemblyOp::Jump {
+                        label: &ir.label_names[unsafe { target.to_index() } as usize],
+                    },
                 };
 
                 assembly.push(pushed_op);
             }
-            *start += last_offset;
-            last_start = *start;
+            new_offset.write(offset + total_offset);
+            last_start = offset;
         }
+
+        let new_offsets = unsafe { new_offsets.assume_init() };
 
         output.write(b".text\n.intel_syntax noprefix\n")?;
 
@@ -401,7 +515,7 @@ impl Architecture for X86_64Nasm {
         for (label, start) in ir
             .label_names
             .iter()
-            .zip(crate::BoxIntoIter::new(ir.label_offsets))
+            .zip(crate::BoxIntoIter::new(new_offsets))
         {
             for op in &assembly[last_start as usize..start as usize] {
                 writeln!(output, "\t{}", op)?;

@@ -1,12 +1,12 @@
 block "fib" :: (%n) {
     %cmp = sub %n 0;
-    %f = flags %cmp z;
+    %f = flags %cmp eq;
     br %f @fib_early_ret(%n) @check_1(%n)
 }
 
 block %check_1 :: (%n) {
-    %c = sub %n 1;
-    %f = flags %cmp z;
+    %cmp = sub %n 1;
+    %f = flags %cmp eq;
     br %f @fib_early_ret(%n) @run_fib_recursive(%n)
 }
 
@@ -23,6 +23,5 @@ block %run_fib_recursive :: (%n) {
 }
 
 block "main" :: { return [rax] } {
-    %n = 5
     call @fib 5
 }

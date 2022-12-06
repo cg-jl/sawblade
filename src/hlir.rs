@@ -7,7 +7,7 @@
 //! user errors in the case of there being any. Past
 //! this point any malformed IR is purely the program's
 //! fault.
-use crate::arch::{Architecture, FlagSet};
+use crate::arch::{Architecture, Flags};
 use crate::index;
 use core::fmt;
 use std::collections::HashMap;
@@ -15,16 +15,6 @@ use std::collections::HashMap;
 use crate::ast::{Expr, LinkageLabel, Lvalue, Rvalue, Statement};
 
 // TODO: Convert tail calls with single parent-child relationship to jumps
-
-bitflags::bitflags! {
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-    pub struct Flags: u8 {
-        const N = 0b1000;
-        const Z = 0b0100;
-        const C = 0b0010;
-        const V = 0b0001;
-    }
-}
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -102,8 +92,36 @@ pub enum Value {
     /// still valid.
     Flags {
         instruction: index::Binding,
-        check_flags: FlagSet,
+        condition: Condition,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub enum Condition {
+    LessThan,
+    GreaterEqual,
+    LessEqual,
+    GreaterThan,
+    Overflow,
+    NotOverflow,
+    Zero,
+    NotZero,
+}
+
+impl Condition {
+    pub fn flags_read(self) -> Flags {
+        match self {
+            Condition::LessThan => Flags::NEGATIVE | Flags::OVERFLOW,
+            Condition::GreaterEqual => Flags::NEGATIVE | Flags::OVERFLOW,
+            Condition::LessEqual => Flags::ZERO | Flags::NEGATIVE | Flags::OVERFLOW,
+            Condition::GreaterThan => Flags::CARRY | Flags::ZERO,
+            Condition::Overflow => Flags::OVERFLOW,
+            Condition::NotOverflow => Flags::OVERFLOW,
+            Condition::Zero => Flags::ZERO,
+            Condition::NotZero => Flags::ZERO,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -112,18 +130,6 @@ pub enum Pure {
     Binding(index::Binding),
     Label(index::Label),
     Constant(u64),
-}
-
-fn parse_flags(set: &str) -> FlagSet {
-    set.chars()
-        .map(|c| match c {
-            'z' => FlagSet::ZERO,
-            'n' => FlagSet::NEGATIVE,
-            'c' => FlagSet::CARRY,
-            'v' => FlagSet::OVERFLOW,
-            _ => unreachable!("parser is dumb and doesn't parse flags correctly"),
-        })
-        .fold(FlagSet::empty(), FlagSet::union)
 }
 
 impl Pure {
@@ -138,7 +144,7 @@ impl Pure {
             crate::ast::Rvalue::Binding(binding) => {
                 bindings.get_binding_index(binding).map(Self::Binding)
             }
-            Rvalue::Flags(_) => None,
+            Rvalue::Condition(_) => None,
         }
     }
 }
@@ -300,7 +306,6 @@ fn expr_as_value<'src>(
                 "add" => {
                     let mut args = args
                         .into_iter()
-                        .rev()
                         .filter_map(|arg| Pure::from_ast(arg, binding_map, label_map));
                     let lhs = args.next()?;
                     let rest = args.collect();
@@ -310,7 +315,6 @@ fn expr_as_value<'src>(
                 "sub" => {
                     let mut args = args
                         .into_iter()
-                        .rev()
                         .map(|arg| Pure::from_ast(arg, binding_map, label_map));
                     let lhs = args.next()??;
                     let rest = args.try_collect()?;
@@ -329,23 +333,29 @@ fn expr_as_value<'src>(
                 }
                 "flags" => {
                     let mut args = args.into_iter();
-                    let binding = args.next().and_then(|r| {
-                        if let Rvalue::Binding(b) = r {
-                            binding_map.get_binding_index(b)
-                        } else {
-                            None
-                        }
-                    })?;
-                    let flags = args.next().and_then(|r| {
-                        if let Rvalue::Flags(fl) = r {
-                            Some(parse_flags(fl))
-                        } else {
-                            None
-                        }
-                    })?;
+                    let binding = args
+                        .next()
+                        .and_then(|r| {
+                            if let Rvalue::Binding(b) = r {
+                                binding_map.get_binding_index(b)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap();
+                    let condition = args
+                        .next()
+                        .and_then(|r| {
+                            if let Rvalue::Condition(fl) = r {
+                                Some(fl)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap();
                     Some(Value::Flags {
                         instruction: binding,
-                        check_flags: flags,
+                        condition,
                     })
                 }
                 _ => None,
@@ -423,13 +433,15 @@ impl Block {
             }
             // TODO: check if the return value is a `br` insn
             crate::ast::Statement::Return(expr) => {
-                match expr_as_br_cond(expr, &binding_map, label_map)? {
+                match expr_as_br_cond(expr, &binding_map, label_map).unwrap() {
                     Ok((flag, if_true, if_false)) => End::ConditionalBranch {
                         flag,
                         if_true,
                         if_false,
                     },
-                    Err(other) => End::TailValue(expr_as_value(other, &binding_map, label_map)?),
+                    Err(other) => {
+                        End::TailValue(expr_as_value(other, &binding_map, label_map).unwrap())
+                    }
                 }
             }
         };
@@ -438,7 +450,7 @@ impl Block {
             .into_iter()
             .filter_map(|stmt| match stmt {
                 crate::ast::Statement::Assign { bindings, value } => {
-                    let value = expr_as_value(value, &binding_map, label_map)?;
+                    let value = expr_as_value(value, &binding_map, label_map).unwrap();
                     let (used_bindings, value) = if let Value::Copied(copied) = value {
                         // Ignore `Pure` values that were ignored
                         let (used_bindings, values): (Vec<_>, Vec<_>) = bindings

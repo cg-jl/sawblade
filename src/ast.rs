@@ -1,6 +1,8 @@
 // Note: I'm building a fast parser that
 // doesn't give a fuck about spans.
 
+use crate::hlir::Condition;
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Block<'a> {
@@ -87,7 +89,7 @@ pub enum Rvalue<'a> {
     Label(&'a str),
     Constant(u64),
     Binding(&'a str),
-    Flags(&'a str),
+    Condition(Condition),
 }
 
 #[derive(Debug)]
@@ -96,7 +98,7 @@ enum LRvalue<'a> {
     Constant(u64),
     Binding(&'a str),
     Label(&'a str),
-    Flags(&'a str),
+    Condition(Condition),
 }
 
 impl<'a> LRvalue<'a> {
@@ -105,7 +107,7 @@ impl<'a> LRvalue<'a> {
             Self::Constant(v) => Some(Rvalue::Constant(v)),
             Self::Binding(v) => Some(Rvalue::Binding(v)),
             Self::Label(l) => Some(Rvalue::Label(l)),
-            Self::Flags(f) => Some(Rvalue::Flags(f)),
+            Self::Condition(f) => Some(Rvalue::Condition(f)),
             Self::Ignore => None,
         }
     }
@@ -180,20 +182,56 @@ impl<'a> Parser<'a> {
         Some(value)
     }
 
-    fn parse_flagset(&mut self) -> Option<&'a str> {
-        let start = self.offset;
-        while self
-            .current()
-            .is_some_and(|c| c == 'n' || c == 'z' || c == 'c' || c == 'v')
-        {
-            self.accept();
-        }
-
-        if start == self.offset {
-            None
+    #[inline(always)]
+    fn r#try<T>(&mut self, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
+        let current_offset = self.offset;
+        if let Some(t) = f(self) {
+            Some(t)
         } else {
-            Some(&self.input[start..self.offset])
+            self.offset = current_offset;
+            None
         }
+    }
+
+    fn parse_condition(&mut self) -> Option<Condition> {
+        // o | ge | gt | le | lt | eq | ne | z
+        self.r#try(|p| {
+            let cond = match p.current()? {
+                'o' => Condition::Overflow,
+                'z' => Condition::Zero,
+                'g' => {
+                    p.accept();
+                    match p.current()? {
+                        'e' => Condition::GreaterEqual,
+                        't' => Condition::GreaterThan,
+                        _ => return None,
+                    }
+                }
+                'l' => {
+                    p.accept();
+                    match p.current()? {
+                        'e' => Condition::LessEqual,
+                        't' => Condition::LessThan,
+                        _ => return None,
+                    }
+                }
+                'e' => {
+                    p.accept();
+                    p.current().filter(|x| *x == 'q')?;
+                    Condition::Zero
+                }
+                'n' => {
+                    p.accept();
+                    match p.current()? {
+                        'z' | 'e' => Condition::NotZero,
+                        _ => return None,
+                    }
+                }
+                _ => return None,
+            };
+            p.accept();
+            Some(cond)
+        })
     }
 
     fn parse_lrvalue(&mut self) -> Option<LRvalue<'a>> {
@@ -215,7 +253,7 @@ impl<'a> Parser<'a> {
                 self.lex_name_end_nonempty().map(LRvalue::Label)
             }
             ch if ch.is_ascii_digit() => self.parse_constant().map(LRvalue::Constant),
-            _ => self.parse_flagset().map(LRvalue::Flags),
+            _ => self.parse_condition().map(LRvalue::Condition),
         }
     }
 
@@ -479,7 +517,7 @@ impl<'a> Parser<'a> {
         while self.current_is_whitespace() {
             // SAFE: current is whitespace returns true only when
             // there's a Some.
-            had_newline |= unsafe { self.current().unwrap_unchecked() } == '\n';
+            had_newline |= self.current().unwrap() == '\n';
             self.accept();
         }
 

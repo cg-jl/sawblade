@@ -2,9 +2,11 @@
 //! so it can be lowered with ease to the particular architecture. Note that there are no constant
 //! besidse
 
-use crate::index::Register;
-use crate::optir::{CFTransfer, Constant};
+use crate::hlir::Condition;
+use crate::index::{Label, Register};
+use crate::optir::{Block, CFTransfer, Constant};
 use crate::PackedSlice;
+#[derive(Debug)]
 pub enum Op {
     /// set register a to b
     CopyRegister {
@@ -35,6 +37,17 @@ pub enum Op {
 
     /// Return.
     Ret,
+
+    /// Branch from a set of flags
+    CBranch {
+        condition: Condition,
+        target: Label,
+    },
+
+    /// Branch unconditionally
+    Branch {
+        target: Label,
+    },
 }
 
 pub struct IR {
@@ -54,6 +67,7 @@ impl IR {
     }
 }
 
+#[derive(Debug)]
 pub enum Input {
     Constant(Constant),
     Register(u8),
@@ -69,7 +83,7 @@ pub enum ByteSize {
 
 fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlice<Register>) -> IR {
     let label_count = ir.blocks.len();
-    let mut label_offsets = crate::InitVec::new(label_count);
+    let mut label_offsets = Vec::with_capacity(label_count);
     let op_count = ir.blocks.iter().map(|block| block.operations.len()).sum();
     // we might need more space for return adjustments.
     let mut ops = Vec::with_capacity(op_count);
@@ -95,20 +109,15 @@ fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlic
                     usage_info_index,
                 } => {
                     let target_block_index = unsafe { label.to_index() } as usize;
-                    // 1. Line up argument registers
-                    {
-                        let currents = args.iter().map(|arg| {
-                            registers.elements[unsafe { arg.to_index() } as usize
-                                + registers.ranges[block_index].start]
-                        });
 
-                        let targets = registers.elements[registers.ranges[block_index].start..]
-                            [..ir.blocks[target_block_index].arg_count]
-                            .iter()
-                            .copied();
-
-                        line_up_registers(currents, targets, &mut ops);
-                    }
+                    align_outgoing_registers(
+                        *label,
+                        &ir.blocks,
+                        block_index,
+                        args.iter().map(|arg| unsafe { arg.to_index() }),
+                        registers,
+                        &mut ops,
+                    );
                     // 2. Make the call
                     ops.push(Op::Call { label: *label });
 
@@ -116,10 +125,15 @@ fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlic
 
                     // 3. Make sure the returns are in the right place.
                     if !usage_info.result_usage.is_empty() {
-                        let currents = usage_info.result_binding_range.clone().map(|binding| {
-                            registers.elements[unsafe { binding.to_index() } as usize
-                                + registers.ranges[block_index].start]
-                        });
+                        let currents =
+                            usage_info
+                                .result_binding_range
+                                .clone()
+                                .into_iter()
+                                .map(|binding| {
+                                    registers.elements[unsafe { binding.to_index() } as usize
+                                        + registers.ranges[block_index].start]
+                                });
 
                         // SAFE: we checked that result_usage is not empty.
                         let max_ret_index = unsafe {
@@ -209,12 +223,85 @@ fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlic
         match &block.end {
             CFTransfer::Return => ops.push(Op::Ret),
             CFTransfer::DirectBranch { .. } => todo!(),
-            CFTransfer::ConditionalBranch { .. } => todo!(),
+            CFTransfer::ConditionalBranch {
+                stored_condition,
+                flag_definition: _, // XXX: I have no idea what to use this for here. Maybe
+                // reordering?
+                target_if_true,
+                target_if_false,
+                true_branch_binding_count,
+            } => {
+                let true_branch_bindings =
+                    &block.exported_bindings[..*true_branch_binding_count as usize];
+                let false_branch_bindings =
+                    &block.exported_bindings[*true_branch_binding_count as usize..];
+
+                // first, know the instructions that are needed to line up each of the bindings
+                // with the required registers.
+
+                let true_branch_adjust_block = {
+                    let mut ops = Vec::new();
+
+                    align_outgoing_registers(
+                        *target_if_true,
+                        &ir.blocks,
+                        block_index,
+                        true_branch_bindings
+                            .iter()
+                            .copied()
+                            .map(|b| unsafe { b.to_index() }),
+                        registers,
+                        &mut ops,
+                    );
+                    ops
+                };
+
+                // NOTE: we don't need a separate block for adjusting registers for the true branch
+                // since we'll make an unconditional branch anyway.
+
+                // put a dummy op here to register the index we'll push the true branch first and
+                // then adjust the other branch
+                let op_offset = ops.len();
+
+                ops.push(Op::Ret); // <- dummy, we'll update this when we have the correct label.
+
+                // align our false branch registers
+                align_outgoing_registers(
+                    *target_if_false,
+                    &ir.blocks,
+                    block_index,
+                    false_branch_bindings
+                        .iter()
+                        .copied()
+                        .map(|b| unsafe { b.to_index() }),
+                    registers,
+                    &mut ops,
+                );
+
+                ops.push(Op::Branch {
+                    target: *target_if_false,
+                });
+
+                // if there's some space needed for adjusting registers for the 'true' branch,
+                // we'll have to make another
+                let branch_label = if true_branch_adjust_block.is_empty() {
+                    *target_if_true
+                } else {
+                    let label_index = label_offsets.len() as u16;
+                    label_offsets.push(ops.len() as u16);
+                    unsafe { Label::from_index(label_index) }
+                };
+
+                ops[op_offset] = Op::CBranch {
+                    condition: *stored_condition,
+                    target: branch_label,
+                };
+            }
         }
     }
 
     let label_names = {
-        let mut names = Box::new_uninit_slice(ir.blocks.len());
+        let mut names = Box::new_uninit_slice(label_offsets.len());
         names
             .iter_mut()
             .skip(label_map.len())
@@ -225,12 +312,21 @@ fn optir_to_llir(ir: crate::optir::IR, label_map: &[&str], registers: PackedSlic
         names.iter_mut().zip(label_map).for_each(|(name, label)| {
             name.write(label.to_string());
         });
+
+        names
+            .iter_mut()
+            .skip(ir.blocks.len())
+            .enumerate()
+            .for_each(|(index, name)| {
+                name.write(format!(".aux{}", index));
+            });
+
         unsafe { names.assume_init() }
     };
 
     IR {
         ops: ops.into_boxed_slice(),
-        label_offsets: label_offsets.finish(),
+        label_offsets: label_offsets.into_boxed_slice(),
         label_names,
     }
 }
@@ -251,7 +347,6 @@ impl crate::DependencyTracker<Register> for Register {
 #[inline]
 fn line_up_registers(
     current: impl IntoIterator<Item = Register>,
-
     target: impl IntoIterator<Item = Register>,
     assembly: &mut Vec<Op>,
 ) {
@@ -275,4 +370,28 @@ fn line_up_registers(
     //     //     source: DataSource::Register(current),
     //     // })
     // }
+}
+
+/// This one is just a way to avoid repeating code.
+#[inline(always)]
+fn align_outgoing_registers(
+    target: Label,
+    blocks: &[Block],
+    block_index: usize,
+    args: impl IntoIterator<Item = u16>,
+    registers: PackedSlice<Register>,
+    ops: &mut Vec<Op>,
+) {
+    let target_block_index = unsafe { target.to_index() };
+    let current_block_register_start = registers.ranges[block_index].start;
+    let currents = args
+        .into_iter()
+        .map(|ix| registers.elements[ix as usize + current_block_register_start]);
+
+    let targets = registers.elements[current_block_register_start..]
+        [..blocks[target_block_index as usize].arg_count]
+        .iter()
+        .copied();
+
+    line_up_registers(currents, targets, ops);
 }

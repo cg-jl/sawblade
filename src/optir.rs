@@ -19,7 +19,7 @@
 //! into architecture-specific representation (i.e assembly), with
 //! label linkage information which is kept from HLIR.
 
-use crate::arch::FlagSet;
+use crate::hlir::Condition;
 
 // NOTE: should I look into "data flow graphs"? Since phi nodes
 // here are pretty much not easy to analyze, maybe I need some sort
@@ -212,7 +212,7 @@ pub enum CFTransfer {
     /// ..true_branch_binding_count is the range of the true branch and the rest is for the false
     /// branch.
     ConditionalBranch {
-        stored_flag: crate::arch::FlagSet,
+        stored_condition: Condition,
         flag_definition: index::Binding,
         target_if_true: index::Label,
         target_if_false: index::Label,
@@ -274,7 +274,7 @@ pub enum Op {
         lhs: index::Binding,
         rhs: index::Binding,
     },
-    FetchFlags(FlagSet),
+    FetchFlags(Condition),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -327,7 +327,7 @@ pub struct IR {
 
 struct BlockBuilder {
     hlir_results: HashMap<index::Binding, index::Binding>,
-    flag_definitions: HashMap<index::Binding, crate::arch::FlagSet>,
+    flag_definitions: HashMap<index::Binding, Condition>,
     ops: Vec<Op>,
     arg_count: usize,
     binding_definitions: Vec<bucket::Definition>,
@@ -338,21 +338,32 @@ struct BlockBuilder {
 #[derive(Debug, Clone)]
 pub struct BindingRange(Range<u16>);
 
-impl BindingRange {
-    pub const fn single(binding: index::Binding) -> Self {
-        // SAFE: we're going to return it as a binding later
-        let index = unsafe { binding.to_index() };
-        Self(index..index + 1)
+impl IntoIterator for BindingRange {
+    type Item = index::Binding;
+
+    type IntoIter = BindingRangeIterator;
+
+    fn into_iter(self) -> Self::IntoIter {
+        BindingRangeIterator(self.0)
     }
 }
 
-impl Iterator for BindingRange {
+unsafe impl std::iter::TrustedLen for BindingRangeIterator {}
+impl std::iter::ExactSizeIterator for BindingRangeIterator {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+pub struct BindingRangeIterator(Range<u16>);
+
+impl Iterator for BindingRangeIterator {
     type Item = index::Binding;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0
             .next()
-            .map(|index| unsafe { index::Binding::from_index(index) })
+            .map(|x| unsafe { index::Binding::from_index(x) })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -360,11 +371,11 @@ impl Iterator for BindingRange {
     }
 }
 
-unsafe impl std::iter::TrustedLen for BindingRange {}
-impl std::iter::ExactSizeIterator for BindingRange {
-    #[inline]
-    fn len(&self) -> usize {
-        self.0.len()
+impl BindingRange {
+    pub const fn single(binding: index::Binding) -> Self {
+        // SAFE: we're going to return it as a binding later
+        let index = unsafe { binding.to_index() };
+        Self(index..index + 1)
     }
 }
 
@@ -666,11 +677,11 @@ impl Block {
                         params,
                         AssignedUsage::Specific(assignment.used_bindings),
                         block_return_counts[unsafe { label.to_index() } as usize],
-                    );
+                    )?;
                 }
                 Value::Flags {
                     instruction,
-                    check_flags,
+                    condition,
                 } => {
                     // Same reason as add: obtaining the flags is just a pure read operation, if
                     // we're not doing anything with them we may as well not compile it.
@@ -680,7 +691,7 @@ impl Block {
                     {
                         let instruction = builder.get_registered_alias(instruction)?;
                         let op_index = builder.ops.len() as u16;
-                        let binding = builder.define(Op::FetchFlags(check_flags));
+                        let binding = builder.define(Op::FetchFlags(condition));
                         builder.get_usage_bucket(instruction).push(bucket::Usage {
                             usage_kind: bucket::UsageKind::Exclusive,
                             index: bucket::UsageIndex::Op(op_index),
@@ -689,12 +700,7 @@ impl Block {
                             builder.register_result(target, binding);
                         }
 
-                        // we need to create another "binding", and register its usage as flag
-                        builder
-                            .flag_definitions
-                            .entry(binding)
-                            .and_modify(|u| *u = check_flags.union(*u))
-                            .or_insert(check_flags);
+                        builder.flag_definitions.insert(binding, condition);
                     }
                 }
             }
@@ -718,6 +724,7 @@ impl Block {
                             AssignedUsage::All,
                             block_return_counts[unsafe { label.to_index() } as usize],
                         )?
+                        .into_iter()
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
                     crate::hlir::Value::Flags { .. } => {
@@ -732,7 +739,7 @@ impl Block {
                 if_false,
             } => {
                 let flag_definition = builder.get_registered_alias(flag_definition)?;
-                let stored_flag = builder.flag_definitions.get(&flag_definition).copied()?;
+                let stored_condition = builder.flag_definitions.get(&flag_definition).copied()?;
                 let target_if_true = if_true.label;
                 let target_if_false = if_false.label;
                 let true_branch_binding_count = if_true.args.len() as u8;
@@ -751,7 +758,7 @@ impl Block {
                     });
                 (
                     CFTransfer::ConditionalBranch {
-                        stored_flag,
+                        stored_condition,
                         flag_definition,
                         target_if_true,
                         target_if_false,

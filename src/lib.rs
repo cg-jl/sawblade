@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+#![feature(let_chains)]
 #![feature(trusted_len)]
+#![feature(result_option_inspect)]
 #![feature(new_uninit)]
 #![feature(allocator_api)]
 #![feature(is_some_and)]
@@ -23,7 +25,7 @@ pub mod index;
 pub mod llir;
 pub mod optir;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct PackedSlice<'elt, 'r, T> {
     pub elements: &'elt [T],
     pub ranges: &'r [Range<usize>],
