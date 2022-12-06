@@ -81,6 +81,7 @@ dependencies = [
 name = "sawblade-fuzz"
 version = "0.0.0"
 dependencies = [
+ "bitflags",
  "libfuzzer-sys",
  "sawblade",
 ]
