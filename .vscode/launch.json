@@ -1,0 +1,83 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'sawblade'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=sawblade"
+                ],
+                "filter": {
+                    "name": "sawblade",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'sawblade'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=sawblade",
+                    "--package=sawblade"
+                ],
+                "filter": {
+                    "name": "sawblade",
+                    "kind": "bin"
+                }
+            },
+            "args": ["examples/fib.sawblade"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'sawblade'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=sawblade",
+                    "--package=sawblade"
+                ],
+                "filter": {
+                    "name": "sawblade",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug benchmark 'sample'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bench=sample",
+                    "--package=sawblade"
+                ],
+                "filter": {
+                    "name": "sample",
+                    "kind": "bench"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
