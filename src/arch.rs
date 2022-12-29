@@ -1,3 +1,4 @@
+mod aarch64;
 use std::mem::MaybeUninit;
 
 use bitflags::bitflags;
